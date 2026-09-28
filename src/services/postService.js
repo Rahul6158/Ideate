@@ -198,6 +198,8 @@ export const postService = {
    * Toggle emoji reaction for a post
    */
   async toggleReaction(postId, userId, emoji) {
+    let result = { action: 'toggled', emoji };
+
     if (isSupabaseConfigured && userId) {
       try {
         // Check if existing
@@ -211,20 +213,40 @@ export const postService = {
 
         if (existing) {
           await supabase.from('post_reactions').delete().eq('id', existing.id);
-          return { action: 'removed', emoji };
+          result = { action: 'removed', emoji, id: existing.id };
         } else {
-          await supabase.from('post_reactions').insert({
+          const { data: inserted, error: insErr } = await supabase.from('post_reactions').insert({
             post_id: postId,
             user_id: userId,
             emoji
-          });
-          return { action: 'added', emoji };
+          }).select().single();
+          if (insErr) {
+            console.warn('post_reactions insert notice:', insErr.message);
+          }
+          result = { action: 'added', emoji, data: inserted };
         }
       } catch (err) {
         console.warn('toggleReaction error:', err.message);
       }
     }
-    return { action: 'toggled', emoji };
+
+    // Also update localStore cache so local and offline stays in sync
+    try {
+      const posts = localStore.getPosts() || [];
+      const post = posts.find(p => p.id === postId);
+      if (post) {
+        if (!post.reactions) post.reactions = [];
+        const exIdx = post.reactions.findIndex(r => r.user_id === userId && r.emoji === emoji);
+        if (exIdx !== -1) {
+          post.reactions.splice(exIdx, 1);
+        } else {
+          post.reactions.push({ post_id: postId, user_id: userId, emoji });
+        }
+        localStore.savePosts(posts);
+      }
+    } catch (_) {}
+
+    return result;
   },
 
   subscribeToPosts(ideaId, onNewPost, onDeletePost, onReactionChange) {
@@ -279,9 +301,9 @@ export const postService = {
         event: '*',
         schema: 'public',
         table: 'post_reactions'
-      }, async () => {
+      }, async (payload) => {
         if (onReactionChange) {
-          onReactionChange();
+          onReactionChange(payload);
         }
       })
       .subscribe();

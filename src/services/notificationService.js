@@ -60,6 +60,9 @@ export const notificationService = {
     }
 
     try {
+      // First auto-clear notifications viewed over an hour ago
+      await this.purgeExpiredViewedNotifications(userId);
+
       const { data, error } = await supabase
         .from('notifications')
         .select('*')
@@ -81,20 +84,44 @@ export const notificationService = {
   },
 
   /**
-   * Synchronous getter from cache / local storage
+   * Synchronous getter from cache / local storage with auto-expiration for viewed notifications
    */
   getNotifications() {
+    const ONE_HOUR_MS = 60 * 60 * 1000;
+    const now = Date.now();
+
+    let list = [];
     if (this._cachedNotifications && this._cachedNotifications.length > 0) {
-      return this._cachedNotifications;
+      list = this._cachedNotifications;
+    } else {
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY_NOTIFICATIONS);
+        if (stored) {
+          list = JSON.parse(stored);
+          this._cachedNotifications = list;
+        }
+      } catch (_) {}
     }
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY_NOTIFICATIONS);
-      if (stored) {
-        this._cachedNotifications = JSON.parse(stored);
-        return this._cachedNotifications;
+
+    // Auto-clear notifications viewed for more than an hour
+    const valid = (list || []).filter(n => {
+      if (n.is_read) {
+        const viewedAtTime = n.viewed_at 
+          ? new Date(n.viewed_at).getTime() 
+          : (n.created_at ? new Date(n.created_at).getTime() : now);
+        if (now - viewedAtTime >= ONE_HOUR_MS) {
+          return false;
+        }
       }
-    } catch (_) {}
-    return [];
+      return true;
+    });
+
+    if (valid.length !== (list || []).length) {
+      this._cachedNotifications = valid;
+      localStorage.setItem(STORAGE_KEY_NOTIFICATIONS, JSON.stringify(valid));
+    }
+
+    return valid;
   },
 
   getUnreadCount() {
@@ -103,11 +130,55 @@ export const notificationService = {
   },
 
   /**
-   * Mark a single notification as read
+   * Auto-clear notifications that have been marked as viewed/read for over 1 hour
+   */
+  async purgeExpiredViewedNotifications(userId) {
+    const ONE_HOUR_MS = 60 * 60 * 1000;
+    const now = Date.now();
+    const current = this.getNotifications();
+    const expiredIds = [];
+
+    const remaining = current.filter(n => {
+      if (n.is_read) {
+        const viewedTimestamp = n.viewed_at 
+          ? new Date(n.viewed_at).getTime() 
+          : (n.created_at ? new Date(n.created_at).getTime() : now);
+        if (now - viewedTimestamp >= ONE_HOUR_MS) {
+          expiredIds.push(n.id);
+          return false;
+        }
+      }
+      return true;
+    });
+
+    if (expiredIds.length > 0) {
+      this._cachedNotifications = remaining;
+      localStorage.setItem(STORAGE_KEY_NOTIFICATIONS, JSON.stringify(remaining));
+      this._notifyListeners();
+    }
+
+    try {
+      if (userId) {
+        const oneHourAgo = new Date(Date.now() - ONE_HOUR_MS).toISOString();
+        await supabase
+          .from('notifications')
+          .delete()
+          .eq('user_id', userId)
+          .eq('is_read', true)
+          .lte('viewed_at', oneHourAgo);
+      }
+    } catch (err) {
+      console.warn('Purge viewed notifications notice:', err);
+    }
+  },
+
+  /**
+   * Mark a single notification as read/viewed
    */
   async markAsRead(id) {
+    const nowIso = new Date().toISOString();
     this._cachedNotifications = this._cachedNotifications.map(n => 
-      n.id === id ? { ...n, is_read: true } : n
+      n.id === id ? { ...n, is_read: true, viewed_at: n.viewed_at || nowIso } : n
     );
     localStorage.setItem(STORAGE_KEY_NOTIFICATIONS, JSON.stringify(this._cachedNotifications));
     this._notifyListeners();
@@ -115,7 +186,7 @@ export const notificationService = {
     try {
       await supabase
         .from('notifications')
-        .update({ is_read: true })
+        .update({ is_read: true, viewed_at: nowIso })
         .eq('id', id);
     } catch (_) {}
 
@@ -126,13 +197,15 @@ export const notificationService = {
    * Toggle read status of a notification
    */
   async toggleReadStatus(id) {
+    const nowIso = new Date().toISOString();
     const current = Array.isArray(this._cachedNotifications) && this._cachedNotifications.length > 0
       ? this._cachedNotifications
       : this.getNotifications();
     let target = null;
     this._cachedNotifications = current.map(n => {
       if (n.id === id) {
-        target = { ...n, is_read: !n.is_read };
+        const newRead = !n.is_read;
+        target = { ...n, is_read: newRead, viewed_at: newRead ? (n.viewed_at || nowIso) : null };
         return target;
       }
       return n;
@@ -144,7 +217,7 @@ export const notificationService = {
       try {
         await supabase
           .from('notifications')
-          .update({ is_read: target.is_read })
+          .update({ is_read: target.is_read, viewed_at: target.viewed_at })
           .eq('id', id);
       } catch (_) {}
     }
@@ -153,13 +226,18 @@ export const notificationService = {
   },
 
   /**
-   * Mark all as read
+   * Mark all as read/viewed
    */
   async markAllAsRead(userId) {
+    const nowIso = new Date().toISOString();
     const current = Array.isArray(this._cachedNotifications) && this._cachedNotifications.length > 0
       ? this._cachedNotifications
       : this.getNotifications();
-    this._cachedNotifications = current.map(n => ({ ...n, is_read: true }));
+    this._cachedNotifications = current.map(n => ({ 
+      ...n, 
+      is_read: true, 
+      viewed_at: n.viewed_at || nowIso 
+    }));
     localStorage.setItem(STORAGE_KEY_NOTIFICATIONS, JSON.stringify(this._cachedNotifications));
     this._notifyListeners();
 
@@ -167,7 +245,7 @@ export const notificationService = {
       try {
         await supabase
           .from('notifications')
-          .update({ is_read: true })
+          .update({ is_read: true, viewed_at: nowIso })
           .eq('user_id', userId)
           .eq('is_read', false);
       } catch (_) {}
@@ -367,3 +445,10 @@ export const notificationService = {
     return () => window.removeEventListener('ideate_notification_update', handler);
   }
 };
+
+// Periodically auto-clear notifications that have been marked as viewed for over 1 hour
+if (typeof window !== 'undefined') {
+  setInterval(() => {
+    notificationService.purgeExpiredViewedNotifications(currentSubscribedUserId);
+  }, 60 * 1000);
+}

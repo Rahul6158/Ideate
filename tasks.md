@@ -1,7 +1,6 @@
 # Completed Tasks
 
-- [x] In the header when clicking account holder's name, open the profile pop menu directly under the account name/pill with options: Profile, Logout (and Admin Console for admin).
-- [x] Fix default avatar appearing for every account on profile edit page; preserve and load the user's actual avatar.
-- [x] Display name is strictly unique; no two users can register or edit to the same username (enforced in database index, registration, and profile edits).
-- [x] Integrate Google OAuth for login and signup using Google Identity Services client.
-- [x] Completely remove Facebook login/signup options.
+- [x] Move the reply and options in chat to the bottom beside the reactions button.
+- [x] Fix reactions visibility across accounts: updated Supabase RLS policies on `post_reactions`, enabled realtime sync on `post_reactions` changes in `DiscussionView`, and synchronized `post.reactions` in `PostItem`.
+- [x] Profile menu opens directly below the account menu / pill, floating cleanly over chat headers with proper z-index.
+- [x] Auto-clear notifications after 1 hour once marked as viewed/read (both in-app cache and database).

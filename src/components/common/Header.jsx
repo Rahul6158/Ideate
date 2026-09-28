@@ -40,7 +40,7 @@ export default function Header({
   const isAdmin = currentUser?.role === 'admin' || currentUser?.email === 'tushrahul58@gmail.com';
 
   return (
-    <header className="sticky top-0 z-10 bg-white/90 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-8 py-3.5 flex items-center justify-between gap-4">
+    <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-8 py-3.5 flex items-center justify-between gap-4">
       {/* Mobile Brand / Menu Toggle */}
       <div className="flex items-center gap-3">
         <button
@@ -131,10 +131,10 @@ export default function Header({
 
           {showProfileMenu && (
             <div 
-              className="absolute right-0 sm:left-1/2 sm:-translate-x-1/2 top-full mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-slate-200/90 p-2 z-50 animate-scale-in"
+              className="absolute right-0 top-full mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-slate-200/90 p-2 z-50 animate-scale-in"
             >
-              {/* Pointer triangle centered under account name */}
-              <div className="hidden sm:block absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-t border-l border-slate-200/80 rotate-45"></div>
+              {/* Pointer triangle directly under account button */}
+              <div className="hidden sm:block absolute -top-1.5 right-6 w-3 h-3 bg-white border-t border-l border-slate-200/80 rotate-45"></div>
 
               {/* User details header */}
               <div className="px-3 py-2 text-xs relative z-10">

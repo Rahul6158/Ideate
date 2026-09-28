@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   MoreHorizontal, 
   Trash2, 
@@ -46,6 +46,11 @@ export default function PostItem({
   const [showExtendedEmojis, setShowExtendedEmojis] = useState(false);
   const [customEmojiInput, setCustomEmojiInput] = useState('');
   const [activeViewerImage, setActiveViewerImage] = useState(null);
+
+  // Sync reactions when prop updates from realtime / refetch
+  useEffect(() => {
+    setReactions(post.reactions || []);
+  }, [post.reactions]);
 
   const isAuthor = currentUser?.id === post.user_id || currentUser?.email === post.user?.email;
 
@@ -160,82 +165,17 @@ export default function PostItem({
         {/* Main post body */}
         <div className="flex-1 min-w-0">
           {/* Header row */}
-          <div className="flex items-center justify-between mb-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span 
-                onClick={() => onSelectPerson && onSelectPerson(post.user || { id: post.user_id, display_name: 'Member' })}
-                className="text-xs sm:text-sm font-bold text-slate-900 tracking-tight cursor-pointer hover:text-blue-600 transition"
-                title="Click to view all messages by this person"
-              >
-                {post.user?.display_name || 'Member'}
-              </span>
-              <span className="text-[11px] text-slate-400 font-normal">
-                {post.created_at}
-              </span>
-            </div>
-
-            {/* Quick Actions (Reply + Options) */}
-            <div className="flex items-center gap-1">
-              {/* Quick Reply Button */}
-              {onReply && (
-                <button
-                  type="button"
-                  onClick={() => onReply(post)}
-                  className="opacity-0 group-hover:opacity-100 px-2 py-1 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 text-xs font-semibold flex items-center gap-1 transition shadow-2xs"
-                  title="Reply to this message"
-                >
-                  <CornerUpLeft className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Reply</span>
-                </button>
-              )}
-
-              {/* Options button */}
-              <div className="relative">
-                <button
-                  onClick={() => setShowMenu(!showMenu)}
-                  className="opacity-0 group-hover:opacity-100 p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
-                  title="Post options"
-                >
-                  <MoreHorizontal className="w-4 h-4" />
-                </button>
-
-                {showMenu && (
-                  <div 
-                    className="absolute right-0 top-full mt-1 w-36 bg-white rounded-xl shadow-lg border border-slate-200/80 p-1 z-20 animate-fade-in"
-                    onMouseLeave={() => setShowMenu(false)}
-                  >
-                    {onReply && (
-                      <button
-                        onClick={() => {
-                          setShowMenu(false);
-                          onReply(post);
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 rounded-lg transition"
-                      >
-                        <CornerUpLeft className="w-3.5 h-3.5 text-blue-500" />
-                        <span>Reply</span>
-                      </button>
-                    )}
-                    {isAuthor ? (
-                      <button
-                        onClick={() => {
-                          setShowMenu(false);
-                          onDelete(post.id);
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-lg transition"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Delete post</span>
-                      </button>
-                    ) : (
-                      <div className="px-3 py-1.5 text-xs text-slate-400">
-                        Collaborator post
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
+          <div className="flex items-center gap-2 mb-1">
+            <span 
+              onClick={() => onSelectPerson && onSelectPerson(post.user || { id: post.user_id, display_name: 'Member' })}
+              className="text-xs sm:text-sm font-bold text-slate-900 tracking-tight cursor-pointer hover:text-blue-600 transition"
+              title="Click to view all messages by this person"
+            >
+              {post.user?.display_name || 'Member'}
+            </span>
+            <span className="text-[11px] text-slate-400 font-normal">
+              {post.created_at}
+            </span>
           </div>
 
           {/* Quoted Replying-To Banner */}
@@ -445,6 +385,72 @@ export default function PostItem({
                           Add
                         </button>
                       </form>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Subtle Divider */}
+            <div className="h-3 w-px bg-slate-200/90 mx-0.5 self-center"></div>
+
+            {/* Quick Reply Button */}
+            {onReply && (
+              <button
+                type="button"
+                onClick={() => onReply(post)}
+                className="px-2 py-0.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 text-xs font-semibold flex items-center gap-1 transition shadow-2xs"
+                title="Reply to this message"
+              >
+                <CornerUpLeft className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Reply</span>
+              </button>
+            )}
+
+            {/* Options button */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowMenu(!showMenu)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition flex items-center"
+                title="Post options"
+              >
+                <MoreHorizontal className="w-3.5 h-3.5" />
+              </button>
+
+              {showMenu && (
+                <div 
+                  className="absolute left-0 bottom-full mb-1.5 w-36 bg-white rounded-xl shadow-xl border border-slate-200/90 p-1 z-30 animate-fade-in"
+                  onMouseLeave={() => setShowMenu(false)}
+                >
+                  {onReply && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMenu(false);
+                        onReply(post);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 rounded-lg transition"
+                    >
+                      <CornerUpLeft className="w-3.5 h-3.5 text-blue-500" />
+                      <span>Reply</span>
+                    </button>
+                  )}
+                  {isAuthor ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMenu(false);
+                        onDelete(post.id);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete post</span>
+                    </button>
+                  ) : (
+                    <div className="px-3 py-1.5 text-xs text-slate-400">
+                      Collaborator post
                     </div>
                   )}
                 </div>

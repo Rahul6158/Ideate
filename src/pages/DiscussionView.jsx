@@ -79,23 +79,70 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
 
     loadData();
 
-    // Subscribe to realtime updates with deduplication
-    const unsubscribe = postService.subscribeToPosts(idea.id, (newPost) => {
-      setPosts(prev => {
-        const existingIdx = prev.findIndex(p => p.id === newPost.id);
-        if (existingIdx !== -1) {
-          const updated = [...prev];
-          updated[existingIdx] = { ...updated[existingIdx], ...newPost };
-          return updated;
+    // Subscribe to realtime updates with deduplication and reactions sync
+    const unsubscribe = postService.subscribeToPosts(
+      idea.id, 
+      (newPost) => {
+        setPosts(prev => {
+          const existingIdx = prev.findIndex(p => p.id === newPost.id);
+          if (existingIdx !== -1) {
+            const updated = [...prev];
+            updated[existingIdx] = { ...updated[existingIdx], ...newPost };
+            return updated;
+          }
+          return [...prev, newPost];
+        });
+        // While actively viewing this idea, keep it marked as read
+        if (currentUser?.id) {
+          notificationService.markIdeaAsRead(currentUser.id, idea.id);
         }
-        return [...prev, newPost];
-      });
-      // While actively viewing this idea, keep it marked as read
-      if (currentUser?.id) {
-        notificationService.markIdeaAsRead(currentUser.id, idea.id);
+        if (onUpdateIdeaStats) onUpdateIdeaStats(idea.id);
+      },
+      (deletedPostId) => {
+        setPosts(prev => prev.filter(p => p.id !== deletedPostId));
+        if (onUpdateIdeaStats) onUpdateIdeaStats(idea.id);
+      },
+      async (reactionPayload) => {
+        // Realtime reaction sync from any user/account
+        if (reactionPayload?.eventType === 'INSERT' && reactionPayload.new) {
+          const item = reactionPayload.new;
+          setPosts(prev => prev.map(p => {
+            if (p.id === item.post_id) {
+              const currentList = p.reactions || [];
+              const exists = currentList.some(r => 
+                (r.id && r.id === item.id) || 
+                (r.user_id === item.user_id && r.emoji === item.emoji)
+              );
+              if (exists) return p;
+              return { ...p, reactions: [...currentList, item] };
+            }
+            return p;
+          }));
+        } else if (reactionPayload?.eventType === 'DELETE' && reactionPayload.old) {
+          const item = reactionPayload.old;
+          setPosts(prev => prev.map(p => {
+            if (p.id === item.post_id || (p.reactions || []).some(r => r.id === item.id)) {
+              return {
+                ...p,
+                reactions: (p.reactions || []).filter(r => 
+                  r.id !== item.id && 
+                  !(item.user_id && r.user_id === item.user_id && r.emoji === item.emoji)
+                )
+              };
+            }
+            return p;
+          }));
+        } else {
+          // If bulk change, refresh posts to guarantee exact reactions
+          try {
+            const freshPosts = await postService.getPosts(idea.id);
+            if (freshPosts && isSubscribed) {
+              setPosts(freshPosts);
+            }
+          } catch (_) {}
+        }
       }
-      if (onUpdateIdeaStats) onUpdateIdeaStats(idea.id);
-    });
+    );
 
     return () => {
       isSubscribed = false;
@@ -219,7 +266,7 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
       {/* COMPACT TOP NAVIGATION BAR (~50px) - SAVES VERTICAL SPACE*/}
       {/* ======================================================== */}
       <header 
-        className="h-12 sm:h-13 px-3 sm:px-6 flex items-center justify-between border-b flex-shrink-0 z-30 transition-colors shadow-2xs backdrop-blur-md"
+        className="h-12 sm:h-13 px-3 sm:px-6 flex items-center justify-between border-b flex-shrink-0 z-10 transition-colors shadow-2xs backdrop-blur-md"
         style={{
           backgroundColor: theme.lightHex ? `${theme.lightHex}ee` : '#ffffffcc',
           borderColor: theme.borderHex || '#e2e8f0'
