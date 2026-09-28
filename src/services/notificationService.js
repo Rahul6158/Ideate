@@ -428,6 +428,69 @@ export const notificationService = {
       .subscribe();
   },
 
+  /**
+   * Dispatch notification when a new post is published in an idea discussion
+   */
+  async notifyPostCreated({ post, ideaId, authorUser }) {
+    if (!ideaId || !authorUser?.id) return;
+
+    try {
+      const { data: idea } = await supabase
+        .from('ideas')
+        .select('id, title, owner_id')
+        .eq('id', ideaId)
+        .single();
+
+      const ideaTitle = idea?.title || 'Idea Discussion';
+      const authorName = authorUser.display_name || authorUser.email?.split('@')[0] || 'Someone';
+      const contentSnippet = post.content
+        ? (post.content.length > 120 ? post.content.substring(0, 117) + '...' : post.content)
+        : 'Shared a new update in discussion.';
+
+      // Find authorized members (excluding the author)
+      const { data: members } = await supabase
+        .from('idea_members')
+        .select('user_id')
+        .eq('idea_id', ideaId)
+        .neq('user_id', authorUser.id)
+        .neq('role', 'pending_invite');
+
+      const recipientSet = new Set();
+      if (idea?.owner_id && idea.owner_id !== authorUser.id) {
+        recipientSet.add(idea.owner_id);
+      }
+      if (members) {
+        members.forEach(m => recipientSet.add(m.user_id));
+      }
+
+      const recipientIds = Array.from(recipientSet);
+      if (recipientIds.length === 0) return;
+
+      const notifications = recipientIds.map(uid => ({
+        user_id: uid,
+        actor_id: authorUser.id,
+        idea_id: ideaId,
+        post_id: post.id,
+        type: 'new_post',
+        title: `${authorName} posted in "${ideaTitle}"`,
+        message: contentSnippet,
+        body: contentSnippet,
+        is_read: false
+      }));
+
+      await supabase.from('notifications').insert(notifications);
+
+      // Trigger Edge Function send-push if available
+      try {
+        await supabase.functions.invoke('send-push', {
+          body: { record: { ...post, idea_id: ideaId, user_id: authorUser.id } }
+        });
+      } catch (_) {}
+    } catch (err) {
+      console.warn('Failed to dispatch post notifications:', err);
+    }
+  },
+
   _notifyListeners() {
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('ideate_notification_update'));

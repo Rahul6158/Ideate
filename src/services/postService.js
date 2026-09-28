@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured, localStore } from '../lib/supabase';
+import { notificationService } from './notificationService';
 
 export const postService = {
   async getPosts(ideaId) {
@@ -92,6 +93,13 @@ export const postService = {
           } catch (e) {
             // Ignore idea update error
           }
+
+          // Asynchronously dispatch notifications and push alerts
+          notificationService.notifyPostCreated({
+            post,
+            ideaId,
+            authorUser: currentUser
+          }).catch(() => {});
 
           return {
             ...post,

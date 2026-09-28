@@ -1,0 +1,8 @@
+[functions.register-push]
+verify_jwt = true
+
+[functions.delete-push]
+verify_jwt = true
+
+[functions.send-push]
+verify_jwt = false

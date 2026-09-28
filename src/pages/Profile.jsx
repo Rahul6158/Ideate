@@ -17,6 +17,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { AVAILABLE_AVATARS, getRandomAvatar } from '../data/avatars';
 import { authService } from '../services/authService';
+import NotificationSettings from '../components/common/NotificationSettings';
 
 export default function Profile({ onBack }) {
   const { currentUser, updateProfile, logout, isSupabaseConfigured } = useAuth();
@@ -318,6 +319,10 @@ export default function Profile({ onBack }) {
           </div>
         </form>
 
+        {/* Web Push Notification Settings */}
+        <div className="mt-8">
+          <NotificationSettings />
+        </div>
       </div>
     </div>
   );

@@ -17,6 +17,7 @@ import { ideaService } from './services/ideaService';
 import { useAuth } from './context/AuthContext';
 import { supabase } from './lib/supabase';
 import { notificationService } from './services/notificationService';
+import { pushNotificationService } from './services/pushNotifications';
 
 import LoadingScreen from './components/common/LoadingScreen';
 
@@ -76,6 +77,50 @@ export default function App() {
       };
     }
   }, [currentUser?.id]);
+
+  // Register Service Worker for push notifications on app bootstrap
+  useEffect(() => {
+    pushNotificationService.registerServiceWorker();
+
+    // Listen for Service Worker notification click routing
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      const handleSwMessage = async (event) => {
+        if (event.data?.type === 'NAVIGATE_IDEA' && event.data.ideaId) {
+          const targetId = event.data.ideaId;
+          const found = ideas.find(i => i.id === targetId);
+          if (found) {
+            handleSelectIdea(found);
+          } else {
+            const fetched = await ideaService.getIdeaById(targetId, currentUser?.id);
+            if (fetched) handleSelectIdea(fetched);
+          }
+        }
+      };
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+      return () => navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+    }
+  }, [ideas, currentUser?.id]);
+
+  // Deep-link routing from notification click on cold start (?ideaId=...)
+  useEffect(() => {
+    if (typeof window !== 'undefined' && currentUser?.id && ideas.length > 0) {
+      const params = new URLSearchParams(window.location.search);
+      const deepIdeaId = params.get('ideaId');
+      if (deepIdeaId && (!activeIdea || activeIdea.id !== deepIdeaId)) {
+        const found = ideas.find(i => i.id === deepIdeaId);
+        if (found) {
+          handleSelectIdea(found);
+        } else {
+          ideaService.getIdeaById(deepIdeaId, currentUser.id).then(fetched => {
+            if (fetched) handleSelectIdea(fetched);
+          });
+        }
+        // Clean URL parameter without page reload
+        const cleanUrl = window.location.pathname + window.location.hash;
+        window.history.replaceState({}, '', cleanUrl);
+      }
+    }
+  }, [ideas, currentUser?.id]);
 
   const handleSelectIdea = (idea) => {
     setActiveIdea(idea);

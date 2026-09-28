@@ -27,3 +27,12 @@
   - Submitting sends a join request notification to the idea owner.
   - Idea owners receive an interactive card in `Notifications` to "Accept Request" (which adds them as `member`) or "Decline".
   - *Files*: `src/components/ideas/JoinIdeaModal.jsx`, `src/services/memberService.js`, `src/pages/Notifications.jsx`, `src/components/common/Header.jsx`, `src/components/common/Sidebar.jsx`, `src/App.jsx`
+
+- [x] **Web Push Notifications**:
+  - Implemented full Web Push notification architecture with Service Worker (`public/service-worker.js`), badge/icons, and notification click navigation.
+  - Added `push_subscriptions` database schema with multi-device support, indexes, and strict user-isolated RLS policies.
+  - Created frontend `pushNotificationService` and `usePushNotifications` hook with automatic Service Worker registration.
+  - Added `NotificationSettings` UI in `Profile.jsx` and opt-in prompt banner in `Notifications.jsx` with test notification trigger.
+  - Created Supabase Edge Functions (`register-push`, `delete-push`, `send-push` with `@supabase/server` and `web-push`).
+  - Added post creation notification dispatcher in `postService.js` and deep-link routing in `App.jsx`.
+  - *Files*: `public/service-worker.js`, `src/services/pushNotifications.js`, `src/hooks/usePushNotifications.js`, `src/components/common/NotificationSettings.jsx`, `supabase/migrations/20260929_push_notifications.sql`, `supabase/functions/send-push/index.ts`, `supabase/functions/register-push/index.ts`, `supabase/functions/delete-push/index.ts`
