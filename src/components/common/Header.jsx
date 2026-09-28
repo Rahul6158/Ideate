@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Bell, Menu, ChevronDown, Layers, Shield, User, LogOut } from 'lucide-react';
+import { Search, Bell, Menu, ChevronDown, Layers, Shield, User, LogOut, KeyRound } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { getRandomAvatar } from '../../data/avatars';
 import { notificationService } from '../../services/notificationService';
@@ -11,7 +11,8 @@ export default function Header({
   onSelectAllIdeas, 
   onOpenProfile,
   onOpenNotifications,
-  onOpenAdmin
+  onOpenAdmin,
+  onOpenJoinIdea
 }) {
   const { currentUser, logout } = useAuth();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -40,12 +41,12 @@ export default function Header({
   const isAdmin = currentUser?.role === 'admin' || currentUser?.email === 'tushrahul58@gmail.com';
 
   return (
-    <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-8 py-3.5 flex items-center justify-between gap-4">
+    <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-slate-200/80 px-3 sm:px-8 py-2.5 sm:py-3.5 flex items-center justify-between gap-2 sm:gap-4 max-w-full">
       {/* Mobile Brand / Menu Toggle */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
         <button
           onClick={onOpenMobileMenu}
-          className="lg:hidden p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition"
+          className="lg:hidden p-1.5 sm:p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition"
         >
           <Menu className="w-5 h-5" />
         </button>
@@ -54,35 +55,48 @@ export default function Header({
           onClick={onSelectAllIdeas}
           className="lg:hidden flex items-center gap-2 cursor-pointer"
         >
-          <div className="w-8 h-8 flex items-center justify-center flex-shrink-0">
+          <div className="w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center flex-shrink-0">
             <img src="/logo.png" alt="Ideate Logo" className="w-full h-full object-contain" />
           </div>
-          <span className="font-extrabold text-base text-slate-900 tracking-tight">Ideate</span>
+          <span className="font-extrabold text-sm sm:text-base text-slate-900 tracking-tight">Ideate</span>
         </div>
       </div>
 
       {/* Search Bar matching Screenshot */}
-      <div className="flex-1 max-w-md mx-2 sm:mx-0">
+      <div className="flex-1 min-w-0 max-w-md mx-1 sm:mx-0">
         <div className="relative">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 sm:left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             placeholder="Search ideas..."
-            className="w-full pl-9 pr-4 py-2 rounded-xl bg-slate-50 hover:bg-slate-100/70 focus:bg-white border border-slate-200/80 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
+            className="w-full pl-8 sm:pl-9 pr-3 sm:pr-4 py-1.5 sm:py-2 rounded-xl bg-slate-50 hover:bg-slate-100/70 focus:bg-white border border-slate-200/80 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
           />
         </div>
       </div>
 
       {/* Right User & Notification Controls */}
-      <div className="flex items-center gap-2 sm:gap-3">
+      <div className="flex items-center gap-1.5 sm:gap-3 flex-shrink-0">
+        {/* Join with ID Button */}
+        {onOpenJoinIdea && (
+          <button
+            type="button"
+            onClick={onOpenJoinIdea}
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200/80 text-xs font-bold transition shadow-2xs"
+            title="Join an Idea using an Idea ID"
+          >
+            <KeyRound className="w-3.5 h-3.5 text-blue-600" />
+            <span>Join with ID</span>
+          </button>
+        )}
+
         {/* Admin Console Shortcut */}
         {isAdmin && (
           <button
             type="button"
             onClick={onOpenAdmin}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 text-xs font-bold transition shadow-2xs"
+            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 text-xs font-bold transition shadow-2xs"
             title="Open Admin Console"
           >
             <Shield className="w-3.5 h-3.5 text-purple-600" />
@@ -93,7 +107,7 @@ export default function Header({
         {/* Notification Bell */}
         <button 
           onClick={onOpenNotifications}
-          className="relative p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition"
+          className="relative p-1.5 sm:p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition"
           title={unreadCount > 0 ? `${unreadCount} unread notifications` : 'Notifications'}
         >
           <Bell className="w-5 h-5" />
@@ -106,12 +120,12 @@ export default function Header({
           )}
         </button>
 
-        {/* User Pill Dropdown - Positioned directly under the account holder's name */}
+        {/* User Pill Dropdown - Shows avatar only on mobile, truncated on tablet/desktop */}
         <div className="relative" ref={profileMenuRef}>
           <button
             type="button"
             onClick={() => setShowProfileMenu(prev => !prev)}
-            className={`flex items-center gap-2 p-1 sm:px-2.5 sm:py-1.5 rounded-2xl transition border ${
+            className={`flex items-center gap-1.5 sm:gap-2 p-1 sm:px-2.5 sm:py-1.5 rounded-2xl transition border ${
               showProfileMenu 
                 ? 'bg-slate-100 border-slate-300 shadow-xs' 
                 : 'hover:bg-slate-100 border-transparent'
@@ -121,12 +135,12 @@ export default function Header({
             <img
               src={currentUser?.avatar_url || getRandomAvatar(currentUser?.email || currentUser?.display_name || 'User')}
               alt={currentUser?.display_name || 'Account'}
-              className="w-8 h-8 rounded-full object-cover ring-2 ring-white shadow-2xs flex-shrink-0 bg-slate-100"
+              className="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover ring-2 ring-white shadow-2xs flex-shrink-0 bg-slate-100"
             />
-            <span className="inline-block text-xs sm:text-sm font-bold text-slate-800 tracking-tight">
+            <span className="hidden sm:inline-block max-w-[100px] md:max-w-[140px] lg:max-w-[180px] truncate text-xs sm:text-sm font-bold text-slate-800 tracking-tight">
               {currentUser?.display_name || 'User'}
             </span>
-            <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${showProfileMenu ? 'rotate-180 text-blue-600' : ''}`} />
+            <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform flex-shrink-0 ${showProfileMenu ? 'rotate-180 text-blue-600' : ''}`} />
           </button>
 
           {showProfileMenu && (
@@ -162,6 +176,20 @@ export default function Header({
                   >
                     <Shield className="w-3.5 h-3.5 text-purple-600" />
                     <span>Admin Console</span>
+                  </button>
+                )}
+
+                {onOpenJoinIdea && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowProfileMenu(false);
+                      onOpenJoinIdea();
+                    }}
+                    className="w-full text-left px-3 py-2 text-xs text-slate-700 font-bold hover:bg-slate-50 hover:text-blue-600 rounded-xl flex items-center gap-2 transition"
+                  >
+                    <KeyRound className="w-3.5 h-3.5 text-blue-500" />
+                    <span>Join Idea with ID</span>
                   </button>
                 )}
 

@@ -1,15 +1,19 @@
 import React, { useState, useMemo } from 'react';
-import { ChevronDown, Plus, Sparkles, Filter } from 'lucide-react';
+import { ChevronDown, Plus, Sparkles, Filter, Compass, Check, X, UserCheck } from 'lucide-react';
 import IdeaCard from '../components/ideas/IdeaCard';
 import { useAuth } from '../context/AuthContext';
+import { memberService } from '../services/memberService';
+import { getIdeaTheme } from '../data/themePalettes';
 
 export default function Dashboard({ 
   ideas = [], 
   onSelectIdea, 
-  onOpenNewIdea, 
+  onOpenNewIdea,
+  onOpenJoinIdea, 
   onDeleteIdea,
   onEditIdea,
-  searchQuery = ''
+  searchQuery = '',
+  onRefreshIdeas
 }) {
   const { currentUser } = useAuth();
   const isAdmin = currentUser?.role === 'admin' || currentUser?.email === 'tushrahul58@gmail.com';
@@ -25,9 +29,45 @@ export default function Dashboard({
     return 'Good evening';
   }, []);
 
+  // Pending invitations for current user
+  const pendingInvites = useMemo(() => {
+    return ideas.filter(i => i.is_pending_invite);
+  }, [ideas]);
+
+  const [processingInviteId, setProcessingInviteId] = useState(null);
+
+  const handleAcceptInvite = async (ideaId) => {
+    if (!currentUser?.id) return;
+    setProcessingInviteId(ideaId);
+    try {
+      await memberService.acceptInvite(ideaId, currentUser.id);
+      if (onRefreshIdeas) onRefreshIdeas();
+    } catch (err) {
+      alert('Failed to accept invitation: ' + err.message);
+    } finally {
+      setProcessingInviteId(null);
+    }
+  };
+
+  const handleRejectInvite = async (ideaId) => {
+    if (!currentUser?.id) return;
+    setProcessingInviteId(ideaId);
+    try {
+      await memberService.rejectInvite(ideaId, currentUser.id);
+      if (onRefreshIdeas) onRefreshIdeas();
+    } catch (err) {
+      alert('Failed to decline invitation: ' + err.message);
+    } finally {
+      setProcessingInviteId(null);
+    }
+  };
+
   // Filter ideas
   const filteredIdeas = useMemo(() => {
     return ideas.filter(idea => {
+      // Pending invites are shown in the dedicated banner above, not regular card feed
+      if (idea.is_pending_invite) return false;
+
       // Search filter
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -38,7 +78,9 @@ export default function Dashboard({
 
       // Tab filter
       const isOwner = idea.owner_id === currentUser?.id;
-      const isMember = idea.is_shared || idea.idea_members?.some(m => m.user_id === currentUser?.id);
+      const isMember = idea.is_shared || idea.idea_members?.some(m => 
+        m.user_id === currentUser?.id && m.role !== 'pending_invite' && m.role !== 'pending_join'
+      );
 
       if (filterTab === 'my') return isOwner;
       if (filterTab === 'shared') return isMember && !isOwner;
@@ -69,16 +111,95 @@ export default function Dashboard({
 
   return (
     <div className="flex-1 px-4 sm:px-8 py-6 sm:py-8 max-w-7xl mx-auto w-full">
-      {/* Greeting Header */}
-      <div className="mb-6 sm:mb-8">
-        <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
-          <span>{greeting}, {currentUser?.display_name || 'Rahul'}</span>
-          <span className="text-2xl">👋</span>
-        </h1>
-        <p className="text-sm sm:text-base text-slate-500 mt-1 font-normal">
-          Here are your ideas and discussions
-        </p>
+      {/* Greeting Header & Quick Actions */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
+            <span>{greeting}, {currentUser?.display_name || 'there'}</span>
+            <span className="text-2xl">👋</span>
+          </h1>
+          <p className="text-sm sm:text-base text-slate-500 mt-1 font-normal">
+            Here are your ideas and discussions
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {onOpenJoinIdea && (
+            <button
+              type="button"
+              onClick={onOpenJoinIdea}
+              className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 active:scale-95 text-slate-700 text-xs sm:text-sm font-semibold border border-slate-200/90 shadow-2xs transition flex items-center gap-1.5"
+            >
+              <Compass className="w-4 h-4 text-blue-600" />
+              <span>Join with ID</span>
+            </button>
+          )}
+
+          {!isAdmin && onOpenNewIdea && (
+            <button
+              type="button"
+              onClick={onOpenNewIdea}
+              className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs sm:text-sm font-bold shadow-sm shadow-blue-500/20 transition flex items-center gap-1.5"
+            >
+              <Plus className="w-4 h-4" />
+              <span>New Idea</span>
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Pending Invitations Banner */}
+      {pendingInvites.length > 0 && (
+        <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-blue-50/90 to-indigo-50/90 border border-blue-200/80 shadow-xs animate-fade-in">
+          <div className="flex items-center gap-2 mb-3">
+            <UserCheck className="w-4 h-4 text-blue-600" />
+            <h3 className="text-xs sm:text-sm font-bold text-slate-900">
+              Pending Invitations ({pendingInvites.length})
+            </h3>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {pendingInvites.map(inv => {
+              const theme = getIdeaTheme(inv.color_theme);
+              return (
+                <div 
+                  key={inv.id} 
+                  className="p-3 bg-white rounded-xl border border-slate-200/80 flex items-center justify-between gap-3 shadow-2xs"
+                >
+                  <div className="min-w-0 flex items-center gap-2.5">
+                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: theme.hex }} />
+                    <div className="truncate">
+                      <p className="text-xs sm:text-sm font-bold text-slate-900 truncate">{inv.title}</p>
+                      <p className="text-[11px] text-slate-500 truncate">
+                        Invited by: {inv.owner?.display_name || inv.owner?.email || 'Creator'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleAcceptInvite(inv.id)}
+                      disabled={processingInviteId === inv.id}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold transition flex items-center gap-1 shadow-2xs"
+                    >
+                      <Check className="w-3 h-3" />
+                      <span>Accept</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRejectInvite(inv.id)}
+                      disabled={processingInviteId === inv.id}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 active:scale-95 text-xs font-semibold transition border border-slate-200/80"
+                    >
+                      <X className="w-3 h-3" />
+                      <span>Decline</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Filter Bar & Sort matching screenshot */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-7">

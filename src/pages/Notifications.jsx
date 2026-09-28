@@ -15,9 +15,13 @@ import {
   ExternalLink,
   Check,
   Radio,
-  Play
+  Play,
+  X,
+  Compass,
+  UserCheck
 } from 'lucide-react';
 import { notificationService } from '../services/notificationService';
+import { memberService } from '../services/memberService';
 import { getSoundSettings, setSoundSettings, playNotificationSound } from '../utils/soundEffects';
 import { useAuth } from '../context/AuthContext';
 
@@ -68,6 +72,108 @@ export default function Notifications({ onBack, onSelectIdea }) {
 
   const handleTestSound = () => {
     playNotificationSound(soundSettings.soundType, true);
+  };
+
+  const [actionStates, setActionStates] = useState({});
+  const [processingId, setProcessingId] = useState(null);
+
+  const handleAcceptInvite = async (notif) => {
+    const targetIdeaId = notif.idea_id || notif.ideaId;
+    if (!targetIdeaId || !currentUser?.id) return;
+    setProcessingId(notif.id);
+    try {
+      await memberService.acceptInvite(targetIdeaId, currentUser.id);
+      setActionStates(prev => ({ ...prev, [notif.id]: 'accepted' }));
+      setActionNotice('Invitation accepted! You have been added to the idea space.');
+      playNotificationSound('chime', true);
+      notificationService.markAsRead(notif.id);
+      if (currentUser?.id) {
+        notificationService.fetchNotifications(currentUser.id);
+      }
+    } catch (err) {
+      alert('Failed to accept invitation: ' + err.message);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleRejectInvite = async (notif) => {
+    const targetIdeaId = notif.idea_id || notif.ideaId;
+    if (!targetIdeaId || !currentUser?.id) return;
+    setProcessingId(notif.id);
+    try {
+      await memberService.rejectInvite(targetIdeaId, currentUser.id);
+      setActionStates(prev => ({ ...prev, [notif.id]: 'rejected' }));
+      setActionNotice('Invitation declined.');
+      notificationService.markAsRead(notif.id);
+      if (currentUser?.id) {
+        notificationService.fetchNotifications(currentUser.id);
+      }
+    } catch (err) {
+      alert('Failed to decline invitation: ' + err.message);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleAcceptJoinRequest = async (notif) => {
+    const targetIdeaId = notif.idea_id || notif.ideaId;
+    if (!targetIdeaId) return;
+
+    let requesterId = null;
+    const uidMatch = notif.message?.match(/\[uid:([a-f0-9-]+)\]/i);
+    if (uidMatch) {
+      requesterId = uidMatch[1];
+    }
+
+    if (!requesterId) {
+      alert('Could not determine requester user ID from notification.');
+      return;
+    }
+
+    setProcessingId(notif.id);
+    try {
+      await memberService.acceptJoinRequest(targetIdeaId, requesterId, notif.id);
+      setActionStates(prev => ({ ...prev, [notif.id]: 'accepted' }));
+      setActionNotice('Join request approved! Collaborator added.');
+      playNotificationSound('chime', true);
+      notificationService.markAsRead(notif.id);
+      if (currentUser?.id) {
+        notificationService.fetchNotifications(currentUser.id);
+      }
+    } catch (err) {
+      alert('Failed to approve join request: ' + err.message);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleRejectJoinRequest = async (notif) => {
+    const targetIdeaId = notif.idea_id || notif.ideaId;
+    if (!targetIdeaId) return;
+
+    let requesterId = null;
+    const uidMatch = notif.message?.match(/\[uid:([a-f0-9-]+)\]/i);
+    if (uidMatch) {
+      requesterId = uidMatch[1];
+    }
+
+    setProcessingId(notif.id);
+    try {
+      if (requesterId) {
+        await memberService.rejectJoinRequest(targetIdeaId, requesterId, notif.id);
+      }
+      setActionStates(prev => ({ ...prev, [notif.id]: 'rejected' }));
+      setActionNotice('Join request declined.');
+      notificationService.markAsRead(notif.id);
+      if (currentUser?.id) {
+        notificationService.fetchNotifications(currentUser.id);
+      }
+    } catch (err) {
+      alert('Failed to decline join request: ' + err.message);
+    } finally {
+      setProcessingId(null);
+    }
   };
 
   const handleSendTestNotification = () => {
@@ -139,7 +245,7 @@ export default function Notifications({ onBack, onSelectIdea }) {
   // Filtered notifications
   const filteredNotifications = safeList.filter(n => {
     if (filter === 'unread') return !n.is_read;
-    if (filter === 'ideas') return ['idea', 'voice', 'discussion'].includes(n.type);
+    if (filter === 'ideas') return ['idea', 'voice', 'discussion', 'invite', 'join_request'].includes(n.type);
     if (filter === 'system') return ['system', 'member'].includes(n.type);
     return true;
   });
@@ -148,6 +254,10 @@ export default function Notifications({ onBack, onSelectIdea }) {
 
   const getNotificationIcon = (type) => {
     switch (type) {
+      case 'invite':
+        return <UserCheck className="w-4 h-4 text-blue-600" />;
+      case 'join_request':
+        return <Compass className="w-4 h-4 text-amber-600" />;
       case 'voice':
         return <Mic className="w-4 h-4 text-purple-600" />;
       case 'idea':
@@ -163,6 +273,10 @@ export default function Notifications({ onBack, onSelectIdea }) {
 
   const getIconBg = (type) => {
     switch (type) {
+      case 'invite':
+        return 'bg-blue-100';
+      case 'join_request':
+        return 'bg-amber-100';
       case 'voice':
         return 'bg-purple-100';
       case 'idea':
@@ -373,6 +487,91 @@ export default function Notifications({ onBack, onSelectIdea }) {
                   <p className="text-xs sm:text-sm text-slate-500 mt-1 leading-relaxed">
                     {notif.message}
                   </p>
+
+                  {/* Interactive Action Buttons for Idea Invites */}
+                  {notif.type === 'invite' && (
+                    <div className="mt-3 flex items-center gap-2">
+                      {actionStates[notif.id] === 'accepted' ? (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Invitation Accepted</span>
+                        </span>
+                      ) : actionStates[notif.id] === 'rejected' ? (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-semibold">
+                          <X className="w-3.5 h-3.5 text-slate-400" />
+                          <span>Invitation Declined</span>
+                        </span>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleAcceptInvite(notif)}
+                            disabled={processingId === notif.id}
+                            className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+                          >
+                            {processingId === notif.id ? (
+                              <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            ) : (
+                              <Check className="w-3.5 h-3.5" />
+                            )}
+                            <span>Accept</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRejectInvite(notif)}
+                            disabled={processingId === notif.id}
+                            className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 active:scale-95 text-xs font-semibold transition flex items-center gap-1.5 border border-slate-200/80"
+                          >
+                            <X className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Decline</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Interactive Action Buttons for Join Requests (for Idea Creator/Admin) */}
+                  {notif.type === 'join_request' && (
+                    <div className="mt-3 flex items-center gap-2">
+                      {actionStates[notif.id] === 'accepted' ? (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Request Approved</span>
+                        </span>
+                      ) : actionStates[notif.id] === 'rejected' ? (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-semibold">
+                          <X className="w-3.5 h-3.5 text-slate-400" />
+                          <span>Request Declined</span>
+                        </span>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleAcceptJoinRequest(notif)}
+                            disabled={processingId === notif.id}
+                            className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+                          >
+                            {processingId === notif.id ? (
+                              <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            ) : (
+                              <Check className="w-3.5 h-3.5" />
+                            )}
+                            <span>Accept Request</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRejectJoinRequest(notif)}
+                            disabled={processingId === notif.id}
+                            className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 active:scale-95 text-xs font-semibold transition flex items-center gap-1.5 border border-slate-200/80"
+                          >
+                            <X className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Decline</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-4 mt-2.5 text-[11px] text-slate-400">
                     <span>{formatTime(notif.created_at)}</span>
 

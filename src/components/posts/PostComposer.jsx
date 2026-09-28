@@ -854,7 +854,7 @@ export default function PostComposer({
               title="Record voice note directly at top of input box"
             >
               <Mic className={`w-3.5 h-3.5 ${voiceRecorderState === 'recording' ? 'text-rose-600 animate-pulse' : 'text-slate-500'}`} />
-              <span>Voice</span>
+              <span>Voicenote</span>
             </button>
 
             {/* Speak-to-text button */}

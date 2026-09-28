@@ -18,20 +18,11 @@ import AudioPlayer from './AudioPlayer';
 import { useAuth } from '../../context/AuthContext';
 import { getRandomAvatar } from '../../data/avatars';
 import { postService } from '../../services/postService';
-
-export const PRESET_REACTIONS = [
-  { emoji: '❤️', label: 'liked it' },
-  { emoji: '👌🏻', label: 'sounds good' },
-  { emoji: '💯', label: 'i agree with you 100%' },
-  { emoji: '❌', label: 'that doesnt work bud' },
-  { emoji: '👏🏻', label: 'great work' },
-  { emoji: '🆗', label: 'okk' }
-];
-
-const EXTENDED_EMOJIS = ['🔥', '🎉', '🚀', '💡', '🤔', '👀', '⚡', '🙌', '🤝', '🎯', '✨', '💪', '🏆', '🤩', '☕', '🌟'];
+import { PRESET_REACTIONS, EXTENDED_EMOJIS } from '../../data/reactions';
 
 export default function PostItem({ 
   post, 
+  members = [],
   onDelete, 
   onReply, 
   onSelectPerson,
@@ -46,6 +37,7 @@ export default function PostItem({
   const [showExtendedEmojis, setShowExtendedEmojis] = useState(false);
   const [customEmojiInput, setCustomEmojiInput] = useState('');
   const [activeViewerImage, setActiveViewerImage] = useState(null);
+  const [activeReactorsModal, setActiveReactorsModal] = useState(null);
 
   // Sync reactions when prop updates from realtime / refetch
   useEffect(() => {
@@ -84,7 +76,16 @@ export default function PostItem({
     if (existingIdx !== -1) {
       setReactions(prev => prev.filter((_, i) => i !== existingIdx));
     } else {
-      setReactions(prev => [...prev, { emoji, user_id: currentUser.id }]);
+      setReactions(prev => [...prev, { 
+        emoji, 
+        user_id: currentUser.id,
+        user: {
+          id: currentUser.id,
+          display_name: currentUser.display_name,
+          email: currentUser.email,
+          avatar_url: currentUser.avatar_url
+        }
+      }]);
     }
 
     try {
@@ -101,11 +102,41 @@ export default function PostItem({
     setCustomEmojiInput('');
   };
 
-  // Group reactions by emoji
+  // Group reactions by emoji and resolve reactor user details
   const reactionGroups = reactions.reduce((acc, r) => {
-    if (!acc[r.emoji]) acc[r.emoji] = { count: 0, hasReacted: false };
+    if (!acc[r.emoji]) acc[r.emoji] = { count: 0, hasReacted: false, reactors: [] };
     acc[r.emoji].count += 1;
     if (r.user_id === currentUser?.id) acc[r.emoji].hasReacted = true;
+
+    // Resolve reactor user details from r.user, currentUser, or members
+    let reactor = r.user;
+    if (!reactor) {
+      if (currentUser && r.user_id === currentUser.id) {
+        reactor = {
+          id: currentUser.id,
+          display_name: currentUser.display_name,
+          email: currentUser.email,
+          avatar_url: currentUser.avatar_url
+        };
+      } else {
+        const found = (members || []).find(m => m.user_id === r.user_id || m.id === r.user_id);
+        if (found) {
+          reactor = {
+            id: found.user_id || found.id,
+            display_name: found.display_name,
+            email: found.email,
+            avatar_url: found.avatar_url
+          };
+        } else {
+          reactor = {
+            id: r.user_id,
+            display_name: 'Collaborator',
+            avatar_url: getRandomAvatar(r.user_id)
+          };
+        }
+      }
+    }
+    acc[r.emoji].reactors.push(reactor);
     return acc;
   }, {});
 
@@ -276,26 +307,79 @@ export default function PostItem({
               {likes > 0 && <span className="text-[11px] font-bold">{likes}</span>}
             </button>
 
-            {/* Rendered Reaction Badges */}
+            {/* Rendered Reaction Badges with Avatars & Who Reacted Details */}
             {Object.entries(reactionGroups).map(([emoji, info]) => {
               const preset = PRESET_REACTIONS.find(p => p.emoji === emoji);
               const label = preset ? preset.label : 'reaction';
 
               return (
-                <button
-                  key={emoji}
-                  type="button"
-                  onClick={() => handleToggleReaction(emoji)}
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold transition border shadow-2xs ${
-                    info.hasReacted 
-                      ? 'bg-blue-50/90 text-blue-700 border-blue-300' 
-                      : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
-                  }`}
-                  title={`${label} (${info.count})`}
-                >
-                  <span className="text-sm">{emoji}</span>
-                  <span className="text-[11px]">{info.count}</span>
-                </button>
+                <div key={emoji} className="relative group/badge inline-flex items-center">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleReaction(emoji)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition border shadow-2xs hover:scale-105 active:scale-95 ${
+                      info.hasReacted 
+                        ? 'bg-blue-50/90 text-blue-700 border-blue-300 ring-1 ring-blue-200' 
+                        : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+                    }`}
+                    title={`${label} • Click to ${info.hasReacted ? 'remove reaction' : 'react'}`}
+                  >
+                    <span className="text-sm leading-none">{emoji}</span>
+                    <span className="text-[11px] font-bold">{info.count}</span>
+
+                    {/* Miniature Avatar Stack - Click to open full details */}
+                    <div 
+                      className="flex -space-x-1 ml-0.5 items-center cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveReactorsModal({ emoji, label, info });
+                      }}
+                      title="See who reacted"
+                    >
+                      {info.reactors.slice(0, 3).map((u, i) => (
+                        <img
+                          key={u.id || i}
+                          src={u.avatar_url || getRandomAvatar(u.email || u.display_name || i)}
+                          alt={u.display_name || 'Member'}
+                          className="w-4 h-4 rounded-full object-cover ring-1 ring-white"
+                        />
+                      ))}
+                    </div>
+                  </button>
+
+                  {/* Desktop Hover Tooltip showing WHO reacted */}
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/badge:flex flex-col items-center z-50 pointer-events-none animate-fade-in min-w-[140px] max-w-[220px]">
+                    <div className="w-full bg-slate-900/95 backdrop-blur-md text-white text-[11px] py-2 px-3 rounded-xl shadow-2xl border border-white/10 flex flex-col gap-1.5">
+                      <div className="font-semibold text-slate-200 border-b border-white/10 pb-1 flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-1">
+                          <span className="text-sm">{emoji}</span>
+                          <span className="capitalize">{label}</span>
+                        </span>
+                        <span className="text-slate-400 font-mono text-[10px]">({info.count})</span>
+                      </div>
+                      <div className="flex flex-col gap-1.5 text-left max-h-36 overflow-y-auto">
+                        {info.reactors.map((reactor, idx) => {
+                          const isSelf = reactor.id === currentUser?.id;
+                          const name = isSelf ? 'You' : (reactor.display_name || reactor.email?.split('@')[0] || 'Member');
+                          return (
+                            <div key={reactor.id || idx} className="flex items-center gap-2 text-[10px]">
+                              <img 
+                                src={reactor.avatar_url || getRandomAvatar(reactor.email || name)} 
+                                alt={name} 
+                                className="w-4 h-4 rounded-full object-cover ring-1 ring-white/20 flex-shrink-0"
+                              />
+                              <span className={`truncate ${isSelf ? 'font-bold text-sky-300' : 'text-slate-200'}`}>
+                                {name}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    {/* Tooltip triangle tail */}
+                    <div className="w-2.5 h-2.5 bg-slate-900 rotate-45 -mt-1.5 border-r border-b border-white/10"></div>
+                  </div>
+                </div>
               );
             })}
 
@@ -518,6 +602,69 @@ export default function PostItem({
           {/* Bottom helper text */}
           <div className="text-xs text-white/60 py-1 flex-shrink-0">
             Click anywhere outside or press X to close
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* WHO REACTED MODAL (Mobile friendly & complete details)    */}
+      {/* ======================================================== */}
+      {activeReactorsModal && (
+        <div 
+          className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setActiveReactorsModal(null)}
+        >
+          <div 
+            className="bg-white rounded-2xl max-w-xs w-full p-4 shadow-2xl border border-slate-200 animate-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <span className="text-2xl leading-none">{activeReactorsModal.emoji}</span>
+                <div>
+                  <h4 className="text-xs font-bold text-slate-900 capitalize">
+                    {activeReactorsModal.label}
+                  </h4>
+                  <p className="text-[10px] text-slate-400">
+                    {activeReactorsModal.info.count} {activeReactorsModal.info.count === 1 ? 'person reacted' : 'people reacted'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveReactorsModal(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="py-2.5 max-h-60 overflow-y-auto space-y-2">
+              {activeReactorsModal.info.reactors.map((reactor, idx) => {
+                const isSelf = reactor.id === currentUser?.id;
+                const name = isSelf ? 'You' : (reactor.display_name || reactor.email?.split('@')[0] || 'Member');
+                return (
+                  <div key={reactor.id || idx} className="flex items-center justify-between p-1.5 rounded-xl hover:bg-slate-50 transition">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <img
+                        src={reactor.avatar_url || getRandomAvatar(reactor.email || name)}
+                        alt={name}
+                        className="w-7 h-7 rounded-full object-cover ring-1 ring-slate-200 flex-shrink-0"
+                      />
+                      <div className="min-w-0 truncate">
+                        <p className="text-xs font-bold text-slate-800 truncate">
+                          {name} {isSelf && <span className="text-blue-600 font-semibold">(You)</span>}
+                        </p>
+                        {reactor.email && (
+                          <p className="text-[10px] text-slate-400 truncate">{reactor.email}</p>
+                        )}
+                      </div>
+                    </div>
+                    <span className="text-base flex-shrink-0">{activeReactorsModal.emoji}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}

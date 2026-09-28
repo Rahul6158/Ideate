@@ -8,7 +8,10 @@ import {
   Pencil,
   Trash2,
   Info,
-  Eraser
+  Eraser,
+  Settings,
+  Copy,
+  Check
 } from 'lucide-react';
 import PostItem from '../components/posts/PostItem';
 import PostComposer from '../components/posts/PostComposer';
@@ -35,6 +38,22 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
   const [postToDelete, setPostToDelete] = useState(null);
   const [isDeletingPost, setIsDeletingPost] = useState(false);
   const [showDescriptionTooltip, setShowDescriptionTooltip] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [copiedId, setCopiedId] = useState(false);
+  const settingsMenuRef = useRef(null);
+
+  // Close settings menu on click outside
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (settingsMenuRef.current && !settingsMenuRef.current.contains(e.target)) {
+        setIsSettingsOpen(false);
+      }
+    };
+    if (isSettingsOpen) {
+      document.addEventListener('mousedown', handleOutsideClick);
+    }
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [isSettingsOpen]);
 
   // Enhancements: Reply, Filter Person Messages, and Clear Messages
   const [replyingTo, setReplyingTo] = useState(null);
@@ -250,6 +269,8 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
 
   const theme = getIdeaTheme(idea?.color_theme);
   const isOwner = idea?.owner_id === currentUser?.id;
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.email === 'tushrahul58@gmail.com';
+  const canManage = isOwner || isAdmin;
   const userMessagesCount = posts.filter(p => 
     (p.user_id === currentUser?.id || p.user?.email === currentUser?.email) && !p.is_system
   ).length;
@@ -369,27 +390,90 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
             </button>
           )}
 
-          {/* Edit & Delete for Owners */}
-          {isOwner && onEditIdea && (
-            <button
-              type="button"
-              onClick={() => onEditIdea(idea)}
-              className="p-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-600 hover:text-slate-900 border border-slate-200/80 transition shadow-2xs"
-              title="Edit Idea"
-            >
-              <Pencil className="w-3.5 h-3.5" />
-            </button>
-          )}
+          {/* Settings Menu - ONLY visible for the author of the idea and admin, and NOT to members */}
+          {canManage && (
+            <div className="relative" ref={settingsMenuRef}>
+              <button
+                type="button"
+                onClick={() => setIsSettingsOpen(prev => !prev)}
+                className={`p-1.5 rounded-xl transition border shadow-2xs flex items-center justify-center ${
+                  isSettingsOpen 
+                    ? 'bg-slate-900 text-white border-slate-900 shadow-sm' 
+                    : 'bg-white/90 hover:bg-white text-slate-600 hover:text-slate-900 border border-slate-200/80'
+                }`}
+                title="Idea Settings & Management"
+              >
+                <Settings className={`w-4 h-4 transition-transform duration-300 ${isSettingsOpen ? 'rotate-90' : ''}`} />
+              </button>
 
-          {isOwner && onDeleteIdea && (
-            <button
-              type="button"
-              onClick={() => onDeleteIdea(idea)}
-              className="p-1.5 rounded-xl bg-white/90 hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200/80 transition shadow-2xs"
-              title="Delete Idea Space"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
+              {isSettingsOpen && (
+                <div 
+                  className="absolute right-0 top-full mt-1.5 w-48 bg-white rounded-2xl shadow-xl border border-slate-200/90 p-1.5 z-50 animate-scale-in"
+                >
+                  <div className="px-2.5 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Idea Settings
+                  </div>
+
+                  {/* Copy Idea ID */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (idea?.id) {
+                        navigator.clipboard.writeText(idea.id);
+                        setCopiedId(true);
+                        setTimeout(() => setCopiedId(false), 2000);
+                      }
+                    }}
+                    className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-semibold text-slate-700 hover:text-blue-600 hover:bg-blue-50/70 rounded-xl transition text-left"
+                    title="Copy unique Idea ID for collaborators to join"
+                  >
+                    {copiedId ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
+                        <span className="text-emerald-700 font-bold">Copied ID!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                        <span>Copy Idea ID</span>
+                      </>
+                    )}
+                  </button>
+
+                  {/* Edit Idea */}
+                  {onEditIdea && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsSettingsOpen(false);
+                        onEditIdea(idea);
+                      }}
+                      className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-semibold text-slate-700 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition text-left"
+                    >
+                      <Pencil className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                      <span>Edit Idea</span>
+                    </button>
+                  )}
+
+                  <div className="border-t border-slate-100 my-1"></div>
+
+                  {/* Delete Idea */}
+                  {onDeleteIdea && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsSettingsOpen(false);
+                        onDeleteIdea(idea);
+                      }}
+                      className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-xl transition text-left"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
+                      <span>Delete Idea</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </header>
@@ -420,6 +504,7 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
                   <div key={post.id} id={`post-${post.id}`} className="transition-colors duration-500 rounded-2xl">
                     <PostItem
                       post={post}
+                      members={members}
                       onDelete={handleDeletePost}
                       onReply={(p) => setReplyingTo(p)}
                       onSelectPerson={(u) => setSelectedPersonForFilter(u)}

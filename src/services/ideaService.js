@@ -19,16 +19,31 @@ export const ideaService = {
         if (!error && data) {
           return data.map(item => {
             const isOwner = item.owner_id === currentUserId;
-            const isMember = item.idea_members?.some(m => m.user_id === currentUserId);
+            const isMember = item.idea_members?.some(m => 
+              m.user_id === currentUserId && m.role !== 'pending_invite' && m.role !== 'pending_join'
+            );
+            const hasPendingInvite = item.idea_members?.some(m => 
+              m.user_id === currentUserId && m.role === 'pending_invite'
+            );
+            const hasPendingJoin = item.idea_members?.some(m => 
+              m.user_id === currentUserId && m.role === 'pending_join'
+            );
+            const activeMembers = (item.idea_members || []).filter(m => 
+              m.role !== 'pending_invite' && m.role !== 'pending_join'
+            );
+
             return {
               ...item,
               is_shared: !isOwner && isMember,
-              members_count: (item.idea_members?.length || 0) + 1,
+              is_pending_invite: hasPendingInvite,
+              is_pending_join: hasPendingJoin,
+              members_count: activeMembers.length + 1,
               posts_count: item.posts?.length || 0
             };
           }).filter(idea => {
             if (filter === 'my') return idea.owner_id === currentUserId;
             if (filter === 'shared') return idea.is_shared;
+            if (filter === 'invites') return idea.is_pending_invite;
             return true;
           });
         }
@@ -58,16 +73,23 @@ export const ideaService = {
           .select(`
             *,
             owner:profiles!ideas_owner_id_fkey(id, email, display_name, avatar_url),
-            idea_members(user_id, role, profiles(*)),
+            idea_members(id, user_id, role, created_at, profiles(*)),
             posts(id)
           `)
           .eq('id', id)
           .single();
         if (!error && data) {
+          const isOwner = data.owner_id === currentUserId;
+          const isMember = data.idea_members?.some(m => 
+            m.user_id === currentUserId && m.role !== 'pending_invite' && m.role !== 'pending_join'
+          );
+          const activeMembers = (data.idea_members || []).filter(m => 
+            m.role !== 'pending_invite' && m.role !== 'pending_join'
+          );
           return {
             ...data,
-            is_shared: data.owner_id !== currentUserId,
-            members_count: (data.idea_members?.length || 0) + 1,
+            is_shared: !isOwner && isMember,
+            members_count: activeMembers.length + 1,
             posts_count: data.posts?.length || 0
           };
         }

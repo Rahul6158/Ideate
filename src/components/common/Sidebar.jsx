@@ -1,36 +1,38 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  FolderKanban, 
-  FileText, 
-  Users, 
-  Bell, 
-  Plus, 
-  ChevronRight, 
-  LogOut, 
+import {
+  FolderKanban,
+  FileText,
+  Users,
+  Bell,
+  Plus,
+  ChevronRight,
+  LogOut,
   X,
   Layers,
   Sparkles,
   User,
-  Shield
+  Shield,
+  KeyRound
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { getRandomAvatar } from '../../data/avatars';
 import { notificationService } from '../../services/notificationService';
 import { getIdeaTheme } from '../../data/themePalettes';
 
-export default function Sidebar({ 
-  ideas = [], 
-  activeIdeaId, 
-  onSelectIdea, 
-  onSelectAllIdeas, 
-  onOpenNewIdea, 
+export default function Sidebar({
+  ideas = [],
+  activeIdeaId,
+  onSelectIdea,
+  onSelectAllIdeas,
+  onOpenNewIdea,
+  onOpenJoinIdea,
   onOpenAuth,
   onOpenProfile,
   onOpenNotifications,
   onOpenAdmin,
   isAdminOpen = false,
-  isOpen = false, 
-  onClose 
+  isOpen = false,
+  onClose
 }) {
   const { currentUser, logout, isSupabaseConfigured } = useAuth();
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -63,7 +65,7 @@ export default function Sidebar({
       <div className="p-4 sm:p-5 flex-1 overflow-y-auto">
         {/* Logo */}
         <div className="flex items-center justify-between mb-6">
-          <div 
+          <div
             onClick={onSelectAllIdeas}
             className="flex items-center gap-2.5 cursor-pointer group"
           >
@@ -76,7 +78,7 @@ export default function Sidebar({
           </div>
 
           {onClose && (
-            <button 
+            <button
               onClick={onClose}
               className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
             >
@@ -91,11 +93,10 @@ export default function Sidebar({
             onSelectAllIdeas();
             if (onClose) onClose();
           }}
-          className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition-all mb-2 ${
-            !activeIdeaId && !isAdminOpen
-              ? 'bg-blue-50 text-blue-600 shadow-sm shadow-blue-500/5' 
+          className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition-all mb-2 ${!activeIdeaId && !isAdminOpen
+              ? 'bg-blue-50 text-blue-600 shadow-sm shadow-blue-500/5'
               : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
-          }`}
+            }`}
         >
           <FolderKanban className="w-4 h-4 text-blue-600" />
           <span>All Ideas</span>
@@ -108,11 +109,10 @@ export default function Sidebar({
               if (onOpenAdmin) onOpenAdmin();
               if (onClose) onClose();
             }}
-            className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-sm font-bold transition-all mb-6 ${
-              isAdminOpen
+            className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-sm font-bold transition-all mb-6 ${isAdminOpen
                 ? 'bg-amber-500 text-white shadow-md shadow-amber-500/20'
                 : 'bg-amber-50 text-amber-700 hover:bg-amber-100/80 border border-amber-200/60'
-            }`}
+              }`}
           >
             <Shield className={`w-4 h-4 ${isAdminOpen ? 'text-white' : 'text-amber-600'}`} />
             <span>Admin Console</span>
@@ -141,11 +141,10 @@ export default function Sidebar({
                     onSelectIdea(idea);
                     if (onClose) onClose();
                   }}
-                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition text-left truncate group relative ${
-                    isActive
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition text-left truncate group relative ${isActive
                       ? 'text-white font-bold shadow-sm'
                       : 'text-slate-800 hover:text-slate-950'
-                  }`}
+                    }`}
                   style={{
                     backgroundColor: isActive ? theme.hex : `${theme.hex}15`,
                     borderLeft: `3.5px solid ${theme.hex}`
@@ -159,17 +158,16 @@ export default function Sidebar({
                         alt={idea.title}
                         className="w-6 h-6 rounded-lg object-cover ring-1 ring-black/10 shadow-2xs"
                       />
-                      <span 
+                      <span
                         className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full ring-1 ring-white"
                         style={{ backgroundColor: theme.hex }}
                         title={theme.name || 'Theme palette'}
                       />
                     </div>
                   ) : (
-                    <div 
-                      className={`w-6 h-6 rounded-lg flex items-center justify-center font-extrabold text-[10px] flex-shrink-0 shadow-2xs ${
-                        isActive ? 'bg-white/20 text-white' : 'text-white'
-                      }`}
+                    <div
+                      className={`w-6 h-6 rounded-lg flex items-center justify-center font-extrabold text-[10px] flex-shrink-0 shadow-2xs ${isActive ? 'bg-white/20 text-white' : 'text-white'
+                        }`}
                       style={{ backgroundColor: isActive ? undefined : theme.hex }}
                     >
                       {idea.title ? idea.title.charAt(0).toUpperCase() : '💡'}
@@ -180,10 +178,9 @@ export default function Sidebar({
 
                   {/* Unread message counter badge */}
                   {unread > 0 && (
-                    <span 
-                      className={`px-1.5 py-0.5 rounded-full text-[10px] font-black flex-shrink-0 shadow-2xs ${
-                        isActive ? 'bg-white text-slate-900' : 'bg-red-500 text-white animate-pulse'
-                      }`}
+                    <span
+                      className={`px-1.5 py-0.5 rounded-full text-[10px] font-black flex-shrink-0 shadow-2xs ${isActive ? 'bg-white text-slate-900' : 'bg-red-500 text-white animate-pulse'
+                        }`}
                       title={`${unread} unread messages`}
                     >
                       {unread}
@@ -216,11 +213,10 @@ export default function Sidebar({
                       onSelectIdea(idea);
                       if (onClose) onClose();
                     }}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition text-left truncate group relative ${
-                      isActive
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition text-left truncate group relative ${isActive
                         ? 'text-white font-bold shadow-sm'
                         : 'text-slate-800 hover:text-slate-950'
-                    }`}
+                      }`}
                     style={{
                       backgroundColor: isActive ? theme.hex : `${theme.hex}15`,
                       borderLeft: `3.5px solid ${theme.hex}`
@@ -234,17 +230,16 @@ export default function Sidebar({
                           alt={idea.title}
                           className="w-6 h-6 rounded-lg object-cover ring-1 ring-black/10 shadow-2xs"
                         />
-                        <span 
+                        <span
                           className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full ring-1 ring-white"
                           style={{ backgroundColor: theme.hex }}
                           title={theme.name || 'Theme palette'}
                         />
                       </div>
                     ) : (
-                      <div 
-                        className={`w-6 h-6 rounded-lg flex items-center justify-center font-extrabold text-[10px] flex-shrink-0 shadow-2xs ${
-                          isActive ? 'bg-white/20 text-white' : 'text-white'
-                        }`}
+                      <div
+                        className={`w-6 h-6 rounded-lg flex items-center justify-center font-extrabold text-[10px] flex-shrink-0 shadow-2xs ${isActive ? 'bg-white/20 text-white' : 'text-white'
+                          }`}
                         style={{ backgroundColor: isActive ? undefined : theme.hex }}
                       >
                         {idea.title ? idea.title.charAt(0).toUpperCase() : '👥'}
@@ -255,10 +250,9 @@ export default function Sidebar({
 
                     {/* Unread message counter badge */}
                     {unread > 0 && (
-                      <span 
-                        className={`px-1.5 py-0.5 rounded-full text-[10px] font-black flex-shrink-0 shadow-2xs ${
-                          isActive ? 'bg-white text-slate-900' : 'bg-red-500 text-white animate-pulse'
-                        }`}
+                      <span
+                        className={`px-1.5 py-0.5 rounded-full text-[10px] font-black flex-shrink-0 shadow-2xs ${isActive ? 'bg-white text-slate-900' : 'bg-red-500 text-white animate-pulse'
+                          }`}
                         title={`${unread} unread messages`}
                       >
                         {unread}
@@ -271,24 +265,39 @@ export default function Sidebar({
           </div>
         </div>
 
-        {/* New Idea Button (Members only, not Admin) */}
+        {/* New Idea & Join with ID Buttons (Members only, not Admin) */}
         {!isAdmin && (
-          <button
-            onClick={() => {
-              onOpenNewIdea();
-              if (onClose) onClose();
-            }}
-            className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-sm font-semibold rounded-xl shadow-sm shadow-blue-500/20 transition-all flex items-center justify-center gap-2"
-          >
-            <Plus className="w-4 h-4" />
-            <span>New Idea</span>
-          </button>
+          <div className="space-y-2">
+            <button
+              onClick={() => {
+                onOpenNewIdea();
+                if (onClose) onClose();
+              }}
+              className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-sm font-semibold rounded-xl shadow-sm shadow-blue-500/20 transition-all flex items-center justify-center gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              <span>New Idea</span>
+            </button>
+
+            {onOpenJoinIdea && (
+              <button
+                onClick={() => {
+                  onOpenJoinIdea();
+                  if (onClose) onClose();
+                }}
+                className="w-full py-2 px-3 bg-slate-100 hover:bg-slate-200/80 active:scale-95 text-slate-700 hover:text-slate-900 text-xs font-semibold rounded-xl border border-slate-200 transition-all flex items-center justify-center gap-2"
+              >
+                <KeyRound className="w-3.5 h-3.5 text-blue-600" />
+                <span>Join with ID</span>
+              </button>
+            )}
+          </div>
         )}
       </div>
 
       {/* Bottom Profile & Notifications */}
       <div className="p-4 border-t border-slate-100 bg-white">
-        <button 
+        <button
           onClick={onOpenNotifications}
           className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100/80 transition mb-2"
           title="Notifications"
@@ -312,16 +321,16 @@ export default function Sidebar({
           >
             <div className="flex items-center gap-2.5 min-w-0">
               <img
-                src={currentUser?.avatar_url || getRandomAvatar(currentUser?.email || currentUser?.display_name || 'Rahul')}
-                alt={currentUser?.display_name}
+                src={currentUser?.avatar_url || getRandomAvatar(currentUser?.email || currentUser?.display_name || 'User')}
+                alt={currentUser?.display_name || 'User'}
                 className="w-8 h-8 rounded-full object-cover ring-2 ring-white shadow-sm flex-shrink-0"
               />
               <div className="truncate">
                 <div className="text-xs font-semibold text-slate-900 truncate">
-                  {currentUser?.display_name || 'Rahul'}
+                  {currentUser?.display_name || 'Member'}
                 </div>
                 <div className="text-[11px] text-slate-400 truncate">
-                  {currentUser?.email || 'rahul@gmail.com'}
+                  {currentUser?.email || ''}
                 </div>
               </div>
             </div>
@@ -330,7 +339,7 @@ export default function Sidebar({
 
           {/* User Menu / Account Switcher */}
           {showUserMenu && (
-            <div 
+            <div
               className="absolute left-0 bottom-full mb-2 w-56 bg-white rounded-xl shadow-xl border border-slate-200/80 p-2 z-30 animate-fade-in"
               onMouseLeave={() => setShowUserMenu(false)}
             >
@@ -392,7 +401,7 @@ export default function Sidebar({
       {/* Mobile Drawer */}
       {isOpen && (
         <div className="fixed inset-0 z-50 lg:hidden">
-          <div 
+          <div
             className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm animate-fade-in"
             onClick={onClose}
           />

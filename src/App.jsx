@@ -11,6 +11,7 @@ import Profile from './pages/Profile';
 import Notifications from './pages/Notifications';
 import EditIdeaModal from './components/ideas/EditIdeaModal';
 import DeleteIdeaModal from './components/ideas/DeleteIdeaModal';
+import JoinIdeaModal from './components/ideas/JoinIdeaModal';
 import AdminDashboard from './pages/AdminDashboard';
 import { ideaService } from './services/ideaService';
 import { useAuth } from './context/AuthContext';
@@ -24,6 +25,7 @@ export default function App() {
   const [ideas, setIdeas] = useState([]);
   const [activeIdea, setActiveIdea] = useState(null);
   const [isNewIdeaOpen, setIsNewIdeaOpen] = useState(false);
+  const [isJoinIdeaOpen, setIsJoinIdeaOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
@@ -158,6 +160,7 @@ export default function App() {
         onSelectIdea={handleSelectIdea}
         onSelectAllIdeas={handleSelectAllIdeas}
         onOpenNewIdea={() => setIsNewIdeaOpen(true)}
+        onOpenJoinIdea={() => setIsJoinIdeaOpen(true)}
         onOpenAuth={() => setIsAuthModalOpen(true)}
         onOpenProfile={() => {
           setIsProfileOpen(true);
@@ -191,6 +194,7 @@ export default function App() {
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           onSelectAllIdeas={handleSelectAllIdeas}
+          onOpenJoinIdea={() => setIsJoinIdeaOpen(true)}
           onOpenAuth={() => setIsAuthModalOpen(true)}
           onOpenProfile={() => {
             setIsProfileOpen(true);
@@ -246,6 +250,8 @@ export default function App() {
               ideas={ideas}
               onSelectIdea={handleSelectIdea}
               onOpenNewIdea={() => setIsNewIdeaOpen(true)}
+              onOpenJoinIdea={() => setIsJoinIdeaOpen(true)}
+              onRefreshIdeas={loadIdeas}
               onDeleteIdea={handleOpenDeleteIdea}
               onEditIdea={handleOpenEditIdea}
               searchQuery={searchQuery}
@@ -289,6 +295,13 @@ export default function App() {
           isOpen={isNewIdeaOpen}
           onClose={() => setIsNewIdeaOpen(false)}
           onIdeaCreated={handleIdeaCreated}
+        />
+
+        {/* Join Idea Modal */}
+        <JoinIdeaModal
+          isOpen={isJoinIdeaOpen}
+          onClose={() => setIsJoinIdeaOpen(false)}
+          onJoined={() => loadIdeas()}
         />
 
         {/* Edit Idea Modal */}

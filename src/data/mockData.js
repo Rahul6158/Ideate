@@ -1,35 +1,7 @@
 // Initial seed data replicating the attached Ideate UI design exactly
 
-export const USERS = [
-  {
-    id: 'user-rahul',
-    email: 'rahul@gmail.com',
-    display_name: 'Rahul',
-    avatar_url: '/avatars/smart-dev.jpg',
-    role: 'Owner'
-  },
-  {
-    id: 'user-arun',
-    email: 'arun@gmail.com',
-    display_name: 'Arun',
-    avatar_url: '/avatars/boy-avatar.avif',
-    role: 'Member'
-  },
-  {
-    id: 'user-kiran',
-    email: 'kiran@gmail.com',
-    display_name: 'Kiran',
-    avatar_url: '/avatars/astronaut-dev.avif',
-    role: 'Member'
-  },
-  {
-    id: 'user-priya',
-    email: 'priya@gmail.com',
-    display_name: 'Priya',
-    avatar_url: '/avatars/girl-dev.jpg',
-    role: 'Member'
-  }
-];
+// Clean seed data with no demo credentials
+export const USERS = [];
 
 import { COVERS_MAP } from './coverImages';
 

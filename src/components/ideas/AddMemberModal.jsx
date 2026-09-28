@@ -70,7 +70,7 @@ export default function AddMemberModal({ isOpen, onClose, ideaId, onMemberAdded 
     setError('');
     setLoading(true);
     try {
-      const newMember = await memberService.addMember(ideaId, selectedUser, role);
+      const newMember = await memberService.inviteMember(ideaId, selectedUser, role);
       setSuccess(true);
       setTimeout(() => {
         onMemberAdded(newMember);
@@ -78,9 +78,9 @@ export default function AddMemberModal({ isOpen, onClose, ideaId, onMemberAdded 
         setSearchQuery('');
         setSelectedUser(null);
         setSuccess(false);
-      }, 500);
+      }, 700);
     } catch (err) {
-      setError(err.message || 'Failed to add collaborator');
+      setError(err.message || 'Failed to send invitation');
     } finally {
       setLoading(false);
     }
@@ -99,10 +99,10 @@ export default function AddMemberModal({ isOpen, onClose, ideaId, onMemberAdded 
         <div className="flex items-start justify-between mb-4">
           <div>
             <h3 className="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
-              <span>Add Collaborator</span>
+              <span>Invite Collaborator</span>
             </h3>
             <p className="text-xs sm:text-sm text-slate-500 mt-0.5 leading-relaxed">
-              Find registered users by email to invite them into this idea space.
+              Search registered users by email or username to send an invitation. They will be added once they accept.
             </p>
           </div>
           <button 
@@ -147,7 +147,7 @@ export default function AddMemberModal({ isOpen, onClose, ideaId, onMemberAdded 
                     setSelectedUser(null);
                   }
                 }}
-                placeholder="Type member email (e.g. rahul@gmail.com)..."
+                placeholder="Type member email (e.g. alex@example.com)..."
                 className="w-full pl-10 pr-9 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition shadow-2xs"
               />
               {isSearching ? (
@@ -315,12 +315,12 @@ export default function AddMemberModal({ isOpen, onClose, ideaId, onMemberAdded 
               {loading ? (
                 <>
                   <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
-                  <span>Adding...</span>
+                  <span>Sending...</span>
                 </>
               ) : (
                 <>
                   <Check className="w-4 h-4" />
-                  <span>Add Collaborator</span>
+                  <span>Send Invitation</span>
                 </>
               )}
             </button>

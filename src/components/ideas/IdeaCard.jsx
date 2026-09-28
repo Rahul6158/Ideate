@@ -1,9 +1,35 @@
 import React, { useState } from 'react';
-import { Users, MessageSquare, MoreVertical, Trash2, Edit3, Share2 } from 'lucide-react';
+import { Users, MessageSquare, MoreVertical, Trash2, Edit3, Share2, Calendar, Clock } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { getIdeaTheme } from '../../data/themePalettes';
-
 import { getRandomAvatar } from '../../data/avatars';
+
+function formatCardDateTime(rawCreated, rawUpdated) {
+  const target = rawUpdated || rawCreated;
+  if (!target) return { date: 'Recently', time: '' };
+
+  if (target === 'Just now' || target === 'Yesterday') {
+    return { date: target, time: '' };
+  }
+
+  const d = new Date(target);
+  if (isNaN(d.getTime())) {
+    return { date: String(target), time: '' };
+  }
+
+  const dateStr = d.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  });
+  const timeStr = d.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+
+  return { date: dateStr, time: timeStr };
+}
 
 export default function IdeaCard({ idea, onSelect, onDelete, onEdit }) {
   const { currentUser } = useAuth();
@@ -13,6 +39,7 @@ export default function IdeaCard({ idea, onSelect, onDelete, onEdit }) {
   const isOwner = idea.owner_id === currentUser?.id;
   const canManage = isOwner || isAdmin;
   const theme = getIdeaTheme(idea.color_theme);
+  const formattedDateTime = formatCardDateTime(idea.created_at, idea.updated_at);
 
   return (
     <div 
@@ -160,8 +187,20 @@ export default function IdeaCard({ idea, onSelect, onDelete, onEdit }) {
               </span>
             </div>
 
-            <div className="text-[11px] text-white/60 font-normal">
-              {idea.updated_at || 'Updated recently'}
+            {/* Properly Styled Date & Time Badge */}
+            <div 
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/45 backdrop-blur-md border border-white/20 text-[11px] text-white/90 shadow-xs"
+              title={formattedDateTime.time ? `Created / Updated: ${formattedDateTime.date} at ${formattedDateTime.time}` : formattedDateTime.date}
+            >
+              <Calendar className="w-3 h-3 text-sky-300 flex-shrink-0" />
+              <span className="font-semibold text-white/95">{formattedDateTime.date}</span>
+              {formattedDateTime.time && (
+                <>
+                  <span className="text-white/40">•</span>
+                  <Clock className="w-3 h-3 text-amber-300 flex-shrink-0" />
+                  <span className="font-medium text-white/85">{formattedDateTime.time}</span>
+                </>
+              )}
             </div>
           </div>
         </div>

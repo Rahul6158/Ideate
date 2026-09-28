@@ -65,6 +65,10 @@ export const memberService = {
   },
 
   async addMember(ideaId, target, role = 'Member') {
+    return this.inviteMember(ideaId, target, role);
+  },
+
+  async inviteMember(ideaId, target, role = 'Member') {
     let profile = null;
 
     if (isSupabaseConfigured) {
@@ -90,43 +94,39 @@ export const memberService = {
         throw new Error('Invalid member account selected.');
       }
 
-      // 2. Insert into idea_members
+      // Check existing membership
+      const { data: existing } = await supabase
+        .from('idea_members')
+        .select('id, role')
+        .match({ idea_id: ideaId, user_id: profile.id })
+        .maybeSingle();
+
+      if (existing) {
+        if (existing.role === 'pending_invite') {
+          throw new Error('An invitation has already been sent to this user.');
+        }
+        throw new Error('This user is already a collaborator on this idea.');
+      }
+
+      // 2. Insert into idea_members with role 'pending_invite'
       const { data, error } = await supabase
         .from('idea_members')
         .insert({
           idea_id: ideaId,
           user_id: profile.id,
-          role: role.toLowerCase()
+          role: 'pending_invite'
         })
         .select()
         .single();
 
       if (error) {
         if (error.code === '23505') {
-          throw new Error('This user is already a collaborator on this idea.');
+          throw new Error('This user already has an invitation or is a member of this idea.');
         }
         throw error;
       }
 
-      // 3. Update idea members_count
-      try {
-        const { count } = await supabase
-          .from('idea_members')
-          .select('id', { count: 'exact', head: true })
-          .eq('idea_id', ideaId);
-        
-        await supabase
-          .from('ideas')
-          .update({
-            members_count: (count || 0) + 1,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', ideaId);
-      } catch (e) {
-        // non-critical
-      }
-
-      // 4. Send notification to the added user
+      // 3. Send notification to the invited user
       try {
         const { data: ideaData } = await supabase
           .from('ideas')
@@ -137,17 +137,17 @@ export const memberService = {
         await supabase.from('notifications').insert({
           user_id: profile.id,
           idea_id: ideaId,
-          title: 'Added to Idea Space 🎉',
-          message: `You have been added as a collaborator to "${ideaData?.title || 'an idea'}".`,
-          type: 'member'
+          title: 'Invitation to Join Idea Space 🤝',
+          message: `You have been invited to collaborate on "${ideaData?.title || 'an idea'}". Would you like to join?`,
+          type: 'invite'
         });
       } catch (e) {
-        // non-critical
+        console.warn('Invite notification error:', e);
       }
 
       return {
         id: data.id,
-        role,
+        role: 'pending_invite',
         user_id: profile.id,
         email: profile.email,
         display_name: profile.display_name,
@@ -160,6 +160,9 @@ export const memberService = {
     const targetEmail = typeof target === 'string' ? target.trim().toLowerCase() : target?.email?.toLowerCase();
     const existing = members.find(m => m.email?.toLowerCase() === targetEmail);
     if (existing) {
+      if (existing.role === 'pending_invite') {
+        throw new Error('An invitation has already been sent to this user.');
+      }
       throw new Error('This user is already a collaborator on this idea.');
     }
 
@@ -174,7 +177,7 @@ export const memberService = {
       id: 'm-' + Date.now(),
       user_id: foundUser.id,
       idea_id: ideaId,
-      role: role || 'Member',
+      role: 'pending_invite',
       display_name: foundUser.display_name,
       email: foundUser.email,
       avatar_url: foundUser.avatar_url || getRandomAvatar(foundUser.email)
@@ -183,15 +186,313 @@ export const memberService = {
     members.push(newMember);
     localStore.setMembers(ideaId, members);
 
-    // Update members_count on idea in localStore
-    const ideas = localStore.getIdeas();
-    const ideaIdx = ideas.findIndex(i => i.id === ideaId);
-    if (ideaIdx !== -1) {
-      ideas[ideaIdx].members_count = members.length + 1;
-      localStore.setIdeas(ideas);
+    return newMember;
+  },
+
+  async acceptInvite(ideaId, userId) {
+    if (isSupabaseConfigured) {
+      // Update role to 'member'
+      const { error } = await supabase
+        .from('idea_members')
+        .update({ role: 'member' })
+        .match({ idea_id: ideaId, user_id: userId });
+
+      if (error) throw error;
+
+      // Update members count on idea
+      try {
+        const { count } = await supabase
+          .from('idea_members')
+          .select('id', { count: 'exact', head: true })
+          .eq('idea_id', ideaId)
+          .neq('role', 'pending_invite')
+          .neq('role', 'pending_join');
+
+        const { data: ideaData } = await supabase
+          .from('ideas')
+          .update({
+            members_count: (count || 0) + 1,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', ideaId)
+          .select('title, owner_id')
+          .single();
+
+        // Get accepting user profile
+        const { data: userProfile } = await supabase
+          .from('profiles')
+          .select('display_name, email')
+          .eq('id', userId)
+          .single();
+
+        const name = userProfile?.display_name || userProfile?.email || 'A collaborator';
+
+        // Notify idea owner
+        if (ideaData?.owner_id) {
+          await supabase.from('notifications').insert({
+            user_id: ideaData.owner_id,
+            idea_id: ideaId,
+            title: 'Invitation Accepted 🎉',
+            message: `${name} accepted your invitation to "${ideaData.title || 'Idea'}".`,
+            type: 'member'
+          });
+        }
+      } catch (e) {
+        console.warn('Accept invite notification notice:', e);
+      }
+
+      return true;
     }
 
-    return newMember;
+    // Local fallback
+    const members = localStore.getMembers(ideaId);
+    const idx = members.findIndex(m => m.user_id === userId);
+    if (idx !== -1) {
+      members[idx].role = 'member';
+      localStore.setMembers(ideaId, members);
+
+      const ideas = localStore.getIdeas();
+      const ideaIdx = ideas.findIndex(i => i.id === ideaId);
+      if (ideaIdx !== -1) {
+        ideas[ideaIdx].members_count = members.filter(m => m.role !== 'pending_invite').length + 1;
+        localStore.setIdeas(ideas);
+      }
+    }
+    return true;
+  },
+
+  async rejectInvite(ideaId, userId) {
+    if (isSupabaseConfigured) {
+      // Remove pending invite row
+      const { error } = await supabase
+        .from('idea_members')
+        .delete()
+        .match({ idea_id: ideaId, user_id: userId });
+
+      if (error) throw error;
+
+      try {
+        const { data: ideaData } = await supabase
+          .from('ideas')
+          .select('title, owner_id')
+          .eq('id', ideaId)
+          .single();
+
+        const { data: userProfile } = await supabase
+          .from('profiles')
+          .select('display_name, email')
+          .eq('id', userId)
+          .single();
+
+        const name = userProfile?.display_name || userProfile?.email || 'A user';
+
+        if (ideaData?.owner_id) {
+          await supabase.from('notifications').insert({
+            user_id: ideaData.owner_id,
+            idea_id: ideaId,
+            title: 'Invitation Declined',
+            message: `${name} declined the invitation to "${ideaData.title || 'Idea'}".`,
+            type: 'system'
+          });
+        }
+      } catch (_) {}
+
+      return true;
+    }
+
+    // Local fallback
+    let members = localStore.getMembers(ideaId);
+    members = members.filter(m => m.user_id !== userId);
+    localStore.setMembers(ideaId, members);
+    return true;
+  },
+
+  async requestToJoin(ideaId, currentUser) {
+    const cleanId = ideaId.trim();
+
+    if (isSupabaseConfigured) {
+      // 1. Fetch idea
+      const { data: idea, error: ideaErr } = await supabase
+        .from('ideas')
+        .select('id, title, owner_id, description, color_theme, cover_url')
+        .eq('id', cleanId)
+        .single();
+
+      if (ideaErr || !idea) {
+        throw new Error('Idea not found. Please check the Idea ID and try again.');
+      }
+
+      if (idea.owner_id === currentUser.id) {
+        throw new Error('You are the author of this idea space.');
+      }
+
+      // 2. Check if already member
+      const { data: existingMember } = await supabase
+        .from('idea_members')
+        .select('role')
+        .match({ idea_id: cleanId, user_id: currentUser.id })
+        .maybeSingle();
+
+      if (existingMember) {
+        if (existingMember.role === 'member' || existingMember.role === 'admin') {
+          throw new Error('You are already an active collaborator on this idea.');
+        }
+        if (existingMember.role === 'pending_invite') {
+          throw new Error('You already have a pending invitation to this idea! Check your notifications to accept.');
+        }
+      }
+
+      // 3. Send join request notification to idea owner
+      const requesterName = currentUser.display_name || currentUser.email.split('@')[0];
+      const { error: notifErr } = await supabase.from('notifications').insert({
+        user_id: idea.owner_id,
+        idea_id: idea.id,
+        title: 'New Join Request 📩',
+        message: `${requesterName} (${currentUser.email}) requested to join "${idea.title}". [uid:${currentUser.id}]`,
+        type: 'join_request'
+      });
+
+      if (notifErr) {
+        console.warn('Could not post join request notification:', notifErr.message);
+      }
+
+      return {
+        success: true,
+        idea
+      };
+    }
+
+    // Local fallback
+    const ideas = localStore.getIdeas();
+    const idea = ideas.find(i => i.id === cleanId);
+    if (!idea) {
+      throw new Error('Idea not found. Please check the Idea ID and try again.');
+    }
+    if (idea.owner_id === currentUser.id) {
+      throw new Error('You are the author of this idea space.');
+    }
+
+    const members = localStore.getMembers(cleanId);
+    const existing = members.find(m => m.user_id === currentUser.id);
+    if (existing && existing.role !== 'pending_invite') {
+      throw new Error('You are already an active collaborator on this idea.');
+    }
+
+    return { success: true, idea };
+  },
+
+  async acceptJoinRequest(ideaId, requesterUserId, notificationId = null) {
+    if (isSupabaseConfigured) {
+      // 1. Insert into idea_members as 'member'
+      const { data: existing } = await supabase
+        .from('idea_members')
+        .select('id')
+        .match({ idea_id: ideaId, user_id: requesterUserId })
+        .maybeSingle();
+
+      if (existing) {
+        await supabase
+          .from('idea_members')
+          .update({ role: 'member' })
+          .match({ idea_id: ideaId, user_id: requesterUserId });
+      } else {
+        await supabase
+          .from('idea_members')
+          .insert({
+            idea_id: ideaId,
+            user_id: requesterUserId,
+            role: 'member'
+          });
+      }
+
+      // 2. Update members count on idea
+      const { count } = await supabase
+        .from('idea_members')
+        .select('id', { count: 'exact', head: true })
+        .eq('idea_id', ideaId)
+        .neq('role', 'pending_invite')
+        .neq('role', 'pending_join');
+
+      const { data: ideaData } = await supabase
+        .from('ideas')
+        .update({
+          members_count: (count || 0) + 1,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', ideaId)
+        .select('title')
+        .single();
+
+      // 3. Send notification to the requester
+      await supabase.from('notifications').insert({
+        user_id: requesterUserId,
+        idea_id: ideaId,
+        title: 'Join Request Approved 🎉',
+        message: `Your request to join "${ideaData?.title || 'an idea'}" has been approved! You can now collaborate.`,
+        type: 'member'
+      });
+
+      // 4. Mark notification as read if provided
+      if (notificationId) {
+        await supabase
+          .from('notifications')
+          .update({ is_read: true, viewed_at: new Date().toISOString() })
+          .eq('id', notificationId);
+      }
+
+      return true;
+    }
+
+    // Local fallback
+    const members = localStore.getMembers(ideaId);
+    if (!members.some(m => m.user_id === requesterUserId)) {
+      const allUsers = localStore.getUsers();
+      const u = allUsers.find(x => x.id === requesterUserId) || { id: requesterUserId, display_name: 'Member', email: '' };
+      members.push({
+        id: 'm-' + Date.now(),
+        idea_id: ideaId,
+        user_id: requesterUserId,
+        role: 'member',
+        display_name: u.display_name,
+        email: u.email
+      });
+      localStore.setMembers(ideaId, members);
+    }
+    return true;
+  },
+
+  async rejectJoinRequest(ideaId, requesterUserId, notificationId = null) {
+    if (isSupabaseConfigured) {
+      try {
+        const { data: ideaData } = await supabase
+          .from('ideas')
+          .select('title')
+          .eq('id', ideaId)
+          .single();
+
+        // Send decline notification to requester
+        await supabase.from('notifications').insert({
+          user_id: requesterUserId,
+          idea_id: ideaId,
+          title: 'Join Request Declined',
+          message: `Your request to join "${ideaData?.title || 'an idea'}" was not accepted.`,
+          type: 'system'
+        });
+
+        // Mark notification as read if provided
+        if (notificationId) {
+          await supabase
+            .from('notifications')
+            .update({ is_read: true, viewed_at: new Date().toISOString() })
+            .eq('id', notificationId);
+        }
+      } catch (err) {
+        console.warn('Reject join request notice:', err);
+      }
+      return true;
+    }
+
+    return true;
   },
 
   async removeMember(ideaId, memberId) {
@@ -213,7 +514,9 @@ export const memberService = {
         const { count } = await supabase
           .from('idea_members')
           .select('id', { count: 'exact', head: true })
-          .eq('idea_id', ideaId);
+          .eq('idea_id', ideaId)
+          .neq('role', 'pending_invite')
+          .neq('role', 'pending_join');
         
         await supabase
           .from('ideas')

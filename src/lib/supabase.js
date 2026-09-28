@@ -30,8 +30,23 @@ class LocalStore {
   }
 
   init() {
-    // Seamlessly migrate legacy ideaflow data if present
-    ['users', 'current_user', 'ideas', 'members', 'posts'].forEach(k => {
+    // Unconditionally purge legacy demo and rahul session keys
+    try {
+      localStorage.removeItem('ideaflow_current_user_v1');
+      localStorage.removeItem('ideaflow_users_v1');
+      const rawCur = localStorage.getItem(STORAGE_KEY_CURRENT_USER);
+      if (rawCur) {
+        const u = JSON.parse(rawCur);
+        if (!u || u.email === 'rahul@gmail.com' || u.id === 'user-rahul' || u.display_name === 'Rahul') {
+          localStorage.removeItem(STORAGE_KEY_CURRENT_USER);
+        }
+      }
+    } catch {
+      localStorage.removeItem(STORAGE_KEY_CURRENT_USER);
+    }
+
+    // Seamlessly migrate legacy ideaflow content data if present (excluding session)
+    ['users', 'ideas', 'members', 'posts'].forEach(k => {
       const oldVal = localStorage.getItem(`ideaflow_${k}_v1`);
       if (oldVal && !localStorage.getItem(`ideate_${k}_v1`)) {
         localStorage.setItem(`ideate_${k}_v1`, oldVal);
@@ -39,10 +54,7 @@ class LocalStore {
     });
 
     if (!localStorage.getItem(STORAGE_KEY_USERS)) {
-      localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(USERS));
-    }
-    if (!localStorage.getItem(STORAGE_KEY_CURRENT_USER)) {
-      localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(USERS[0]));
+      localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify([]));
     }
     // Clean out template ideas (e.g. idea-1 to idea-7) if present in storage
     const storedIdeas = JSON.parse(localStorage.getItem(STORAGE_KEY_IDEAS) || 'null');
@@ -67,11 +79,26 @@ class LocalStore {
   }
 
   getCurrentUser() {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY_CURRENT_USER) || JSON.stringify(USERS[0]));
+    const raw = localStorage.getItem(STORAGE_KEY_CURRENT_USER);
+    if (!raw) return null;
+    try {
+      const user = JSON.parse(raw);
+      if (!user || user.email === 'rahul@gmail.com' || user.id === 'user-rahul') {
+        localStorage.removeItem(STORAGE_KEY_CURRENT_USER);
+        return null;
+      }
+      return user;
+    } catch {
+      return null;
+    }
   }
 
   setCurrentUser(user) {
-    localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(user));
+    if (!user) {
+      localStorage.removeItem(STORAGE_KEY_CURRENT_USER);
+    } else {
+      localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(user));
+    }
   }
 
   getIdeas() {

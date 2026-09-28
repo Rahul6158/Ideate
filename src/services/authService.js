@@ -1,5 +1,4 @@
 import { supabase, isSupabaseConfigured, localStore } from '../lib/supabase';
-import { USERS } from '../data/mockData';
 import { getRandomAvatar } from '../data/avatars';
 
 export const GOOGLE_CLIENT_ID = '514433759579-r2i3dsva88gcnobhk1bm5eb8rls1lji1.apps.googleusercontent.com';
@@ -45,9 +44,8 @@ export const authService = {
   async getCurrentUser() {
     if (isSupabaseConfigured) {
       const { data: { session }, error } = await supabase.auth.getSession();
-      if (error || !session) {
-        // Fallback to local session user if signed in via Google or offline
-        return localStore.getCurrentUser();
+      if (error || !session?.user) {
+        return null;
       }
       
       let profile = null;
@@ -67,8 +65,8 @@ export const authService = {
         ? rawAvatar
         : getRandomAvatar(session.user.email);
 
-      // Automatically persist avatar if missing or legacy
-      if (!rawAvatar || rawAvatar.includes('dicebear.com')) {
+      // Persist avatar only if missing
+      if (!rawAvatar) {
         try {
           supabase.auth.updateUser({
             data: { avatar_url: avatarUrl }

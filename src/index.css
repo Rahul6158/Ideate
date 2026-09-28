@@ -3,6 +3,10 @@
 @tailwind utilities;
 
 @layer base {
+  html, body, #root {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
   body {
     @apply bg-[#f8fafc] text-slate-800 antialiased font-sans;
     -webkit-tap-highlight-color: transparent;

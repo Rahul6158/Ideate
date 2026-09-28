@@ -16,7 +16,7 @@ export const postService = {
             created_at,
             user:profiles!posts_user_id_fkey(id, email, display_name, avatar_url),
             attachments:post_attachments(*),
-            reactions:post_reactions(*)
+            reactions:post_reactions(*, user:profiles!post_reactions_user_id_fkey(id, email, display_name, avatar_url))
           `)
           .eq('idea_id', ideaId)
           .order('created_at', { ascending: true });
@@ -273,7 +273,7 @@ export const postService = {
             created_at,
             user:profiles!posts_user_id_fkey(id, email, display_name, avatar_url),
             attachments:post_attachments(*),
-            reactions:post_reactions(*)
+            reactions:post_reactions(*, user:profiles!post_reactions_user_id_fkey(id, email, display_name, avatar_url))
           `)
           .eq('id', payload.new.id)
           .single();
