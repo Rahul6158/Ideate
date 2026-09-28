@@ -28,12 +28,15 @@ export function usePushNotifications() {
       await pushNotificationService.registerServiceWorker();
       const sub = await pushNotificationService.getSubscription();
       setIsSubscribed(Boolean(sub));
+      if (sub && currentUser?.id) {
+        pushNotificationService.syncSubscription(currentUser.id).catch(() => {});
+      }
     } catch (err) {
       console.warn('[usePushNotifications] Error checking status:', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentUser?.id]);
 
   useEffect(() => {
     checkStatus();
@@ -79,7 +82,7 @@ export function usePushNotifications() {
   const sendTest = async () => {
     setError(null);
     try {
-      await pushNotificationService.sendTestNotification();
+      await pushNotificationService.sendTestNotification(currentUser?.id);
       return true;
     } catch (err) {
       setError(err.message || 'Failed to send test notification');

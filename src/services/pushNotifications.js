@@ -179,7 +179,24 @@ export const pushNotificationService = {
     const endpoint = subscription.endpoint;
     const deviceLabel = this.getDeviceLabel();
 
-    // 6. Save in Supabase database
+    // 6. Register subscription with local dev server / Vercel API endpoint
+    try {
+      await fetch('/api/register-push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: userId,
+          endpoint,
+          p256dh,
+          auth,
+          device_label: deviceLabel
+        })
+      });
+    } catch (apiErr) {
+      console.warn('[Push] Error registering with /api/register-push:', apiErr.message);
+    }
+
+    // 7. Save in Supabase database
     if (isSupabaseConfigured && supabase) {
       try {
         const { error } = await supabase
@@ -201,11 +218,68 @@ export const pushNotificationService = {
       }
     }
 
-    // 7. Store locally for offline awareness
+    // 8. Store locally for offline awareness
     localStorage.setItem('ideate_push_enabled_v1', 'true');
     localStorage.setItem('ideate_push_endpoint_v1', endpoint);
 
     return subscription;
+  },
+
+  /**
+   * Silently synchronize an existing browser subscription with backend endpoints
+   */
+  async syncSubscription(userId) {
+    if (!userId || !this.isPushSupported()) return null;
+    try {
+      const sub = await this.getSubscription();
+      if (!sub) return null;
+
+      const rawP256dh = sub.getKey('p256dh');
+      const rawAuth = sub.getKey('auth');
+      const p256dh = arrayBufferToBase64(rawP256dh);
+      const auth = arrayBufferToBase64(rawAuth);
+      const endpoint = sub.endpoint;
+      const deviceLabel = this.getDeviceLabel();
+
+      // Sync with API
+      try {
+        await fetch('/api/register-push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: userId,
+            endpoint,
+            p256dh,
+            auth,
+            device_label: deviceLabel
+          })
+        });
+      } catch (_) {}
+
+      // Sync with Supabase
+      if (isSupabaseConfigured && supabase) {
+        try {
+          await supabase
+            .from('push_subscriptions')
+            .upsert({
+              user_id: userId,
+              endpoint,
+              p256dh,
+              auth,
+              device_label: deviceLabel,
+              last_used_at: new Date().toISOString()
+            }, { onConflict: 'endpoint' });
+        } catch (_) {}
+      }
+
+      localStorage.setItem('ideate_push_enabled_v1', 'true');
+      localStorage.setItem('ideate_push_endpoint_v1', endpoint);
+
+      return sub;
+    } catch (err) {
+      console.warn('[Push] Subscription sync failed:', err);
+      return null;
+    }
   },
 
   /**
@@ -245,7 +319,7 @@ export const pushNotificationService = {
   /**
    * Send a test notification to verify push delivery on this device
    */
-  async sendTestNotification() {
+  async sendTestNotification(userId = null) {
     if (!this.isPushSupported()) {
       throw new Error('Notifications are not supported on this browser.');
     }
@@ -255,6 +329,7 @@ export const pushNotificationService = {
       throw new Error('Notification permission has not been granted yet.');
     }
 
+    // 1. Instant local/PWA test notification
     const reg = await this.getRegistration();
     if (reg && reg.showNotification) {
       await reg.showNotification('Ideate Notification Test 🚀', {
@@ -267,13 +342,29 @@ export const pushNotificationService = {
           url: '/'
         }
       });
-      return true;
     } else {
       new Notification('Ideate Notification Test 🚀', {
         body: 'Push notifications are active and ready on this device!',
         icon: '/icons/notification-icon.png'
       });
-      return true;
     }
+
+    // 2. Also test backend server push delivery if userId is provided
+    if (userId) {
+      try {
+        await fetch('/api/send-push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipientIds: [userId],
+            title: 'Ideate Server Push Test 🌐',
+            body: 'Server push notification was received successfully by your device!',
+            authorId: userId
+          })
+        });
+      } catch (_) {}
+    }
+
+    return true;
   }
 };

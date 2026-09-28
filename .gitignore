@@ -33,3 +33,5 @@ Thumbs.db
 # Temporary / Agent artifacts
 .tempmediaStorage
 .agents/
+.push_subscriptions_dev.json
+supabase/.temp/

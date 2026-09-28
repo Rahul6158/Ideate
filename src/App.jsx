@@ -78,9 +78,12 @@ export default function App() {
     }
   }, [currentUser?.id]);
 
-  // Register Service Worker for push notifications on app bootstrap
+  // Register Service Worker for push notifications on app bootstrap & sync subscription
   useEffect(() => {
     pushNotificationService.registerServiceWorker();
+    if (currentUser?.id) {
+      pushNotificationService.syncSubscription(currentUser.id).catch(() => {});
+    }
 
     // Listen for Service Worker notification click routing
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {

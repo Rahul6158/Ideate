@@ -30,24 +30,61 @@ export const notificationService = {
   },
 
   /**
-   * Show a real native browser notification if granted
+   * Show a real native notification (uses Service Worker on mobile & desktop, with desktop Notification fallback)
    */
-  showDesktopNotification(title, message, icon = '/logo.png') {
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-      try {
-        const notif = new Notification(title, {
-          body: message,
-          icon,
-          badge: '/logo.png',
-          vibrate: [200, 100, 200]
-        });
-        notif.onclick = () => {
-          window.focus();
-          notif.close();
-        };
-      } catch (err) {
-        console.warn('Native notification failed:', err);
+  async showDesktopNotification(title, message, icon = '/icons/notification-icon.png', data = {}) {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+
+    try {
+      // 1. Mobile browsers (Android Chrome, iOS PWA) strictly require ServiceWorker showNotification
+      if ('serviceWorker' in navigator) {
+        try {
+          let reg = await Promise.race([
+            navigator.serviceWorker.ready,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('SW ready timeout')), 2000))
+          ]).catch(() => null);
+
+          if (!reg) {
+            reg = await navigator.serviceWorker.getRegistration();
+          }
+
+          if (reg && reg.showNotification) {
+            await reg.showNotification(title, {
+              body: message,
+              icon,
+              badge: '/icons/notification-badge.png',
+              vibrate: [200, 100, 200],
+              data: {
+                url: data?.url || (data?.ideaId ? `/?ideaId=${data.ideaId}` : '/'),
+                ...data
+              },
+              tag: data?.ideaId ? `idea-${data.ideaId}` : 'ideate-alert',
+              renotify: true
+            });
+            return;
+          }
+        } catch (swErr) {
+          console.warn('[SW showNotification error, trying fallback]:', swErr);
+        }
       }
+
+      // 2. Desktop-only fallback
+      const notif = new Notification(title, {
+        body: message,
+        icon,
+        badge: '/icons/notification-badge.png',
+        vibrate: [200, 100, 200]
+      });
+      notif.onclick = () => {
+        window.focus();
+        if (data?.url) {
+          window.location.href = data.url;
+        }
+        notif.close();
+      };
+    } catch (err) {
+      console.warn('Native notification failed:', err);
     }
   },
 
@@ -404,7 +441,16 @@ export const notificationService = {
             this._cachedNotifications = [notif, ...this._cachedNotifications.filter(n => n.id !== notif.id)];
             localStorage.setItem(STORAGE_KEY_NOTIFICATIONS, JSON.stringify(this._cachedNotifications));
             playNotificationSound();
-            this.showDesktopNotification(notif.title, notif.message);
+            this.showDesktopNotification(
+              notif.title,
+              notif.message || notif.body,
+              '/icons/notification-icon.png',
+              {
+                ideaId: notif.idea_id,
+                postId: notif.post_id,
+                url: notif.idea_id ? `/?ideaId=${notif.idea_id}` : '/'
+              }
+            );
             this.fetchUnreadCounts(userId);
             this._notifyListeners();
           }
@@ -463,6 +509,20 @@ export const notificationService = {
         members.forEach(m => recipientSet.add(m.user_id));
       }
 
+      // Also include any users who participated in this discussion thread
+      try {
+        const { data: threadPosts } = await supabase
+          .from('posts')
+          .select('user_id')
+          .eq('idea_id', ideaId)
+          .neq('user_id', authorUser.id);
+        if (Array.isArray(threadPosts)) {
+          threadPosts.forEach(p => {
+            if (p.user_id) recipientSet.add(p.user_id);
+          });
+        }
+      } catch (_) {}
+
       const recipientIds = Array.from(recipientSet);
       if (recipientIds.length === 0) return;
 
@@ -480,7 +540,25 @@ export const notificationService = {
 
       await supabase.from('notifications').insert(notifications);
 
-      // Trigger Edge Function send-push if available
+      // 1. Dispatch Web Push notification via local / Vercel API endpoint
+      try {
+        await fetch('/api/send-push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipientIds,
+            ideaId,
+            postId: post.id,
+            title: `${authorName} posted in "${ideaTitle}"`,
+            body: contentSnippet,
+            authorId: authorUser.id
+          })
+        });
+      } catch (pushErr) {
+        console.warn('[Push Service] Delivery via /api/send-push failed:', pushErr.message);
+      }
+
+      // 2. Also invoke Edge Function send-push if available
       try {
         await supabase.functions.invoke('send-push', {
           body: { record: { ...post, idea_id: ideaId, user_id: authorUser.id } }
