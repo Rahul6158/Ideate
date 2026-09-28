@@ -16,9 +16,10 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { authService } from '../services/authService';
 
 export default function Auth({ initialMode = 'signup', onBack }) {
-  const { login, signup, signInWithOAuth, resendConfirmationEmail, isSupabaseConfigured } = useAuth();
+  const { login, signup, signInWithOAuth, signInWithGoogle, resendConfirmationEmail, isSupabaseConfigured } = useAuth();
   const [isSignUp, setIsSignUp] = useState(initialMode === 'signup');
 
   // Form field states
@@ -29,6 +30,10 @@ export default function Auth({ initialMode = 'signup', onBack }) {
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   
+  // Username availability state
+  const [isCheckingUsername, setIsCheckingUsername] = useState(false);
+  const [isUsernameTaken, setIsUsernameTaken] = useState(false);
+
   // Interaction states
   const [loading, setLoading] = useState(false);
   const [socialLoading, setSocialLoading] = useState('');
@@ -48,6 +53,30 @@ export default function Auth({ initialMode = 'signup', onBack }) {
   const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   const isNameValid = displayName.trim().length >= 2;
   const passwordsMatch = confirmPassword.length > 0 && confirmPassword === password;
+
+  // Real-time debounced username uniqueness check
+  useEffect(() => {
+    const trimmed = displayName.trim();
+    if (!isSignUp || trimmed.length < 2) {
+      setIsUsernameTaken(false);
+      setIsCheckingUsername(false);
+      return;
+    }
+
+    setIsCheckingUsername(true);
+    const timer = setTimeout(async () => {
+      try {
+        const available = await authService.isDisplayNameAvailable(trimmed);
+        setIsUsernameTaken(!available);
+      } catch {
+        setIsUsernameTaken(false);
+      } finally {
+        setIsCheckingUsername(false);
+      }
+    }, 450);
+
+    return () => clearTimeout(timer);
+  }, [displayName, isSignUp]);
 
   const handleModeSwitch = (targetSignUp) => {
     if (isSignUp === targetSignUp && !pendingVerification) return;
@@ -116,6 +145,10 @@ export default function Auth({ initialMode = 'signup', onBack }) {
 
     if (!isNameValid) {
       setError('Please enter your full name (at least 2 characters)');
+      return;
+    }
+    if (isUsernameTaken) {
+      setError('The display name is already taken. Please choose another username.');
       return;
     }
     if (!isEmailValid) {
@@ -193,8 +226,17 @@ export default function Auth({ initialMode = 'signup', onBack }) {
     setError('');
     setSocialLoading(provider);
     try {
-      await signInWithOAuth(provider);
+      if (provider === 'google') {
+        if (signInWithGoogle) {
+          await signInWithGoogle();
+        } else {
+          await signInWithOAuth('google');
+        }
+      } else {
+        await signInWithOAuth(provider);
+      }
     } catch (err) {
+      console.error('Social auth error:', err);
       setError(err.message || `Unable to authenticate with ${provider}.`);
     } finally {
       setSocialLoading('');
@@ -496,21 +538,32 @@ export default function Auth({ initialMode = 'signup', onBack }) {
 
               {/* Sign Up Form with reduced vertical height */}
               <form onSubmit={handleSignUp} className="space-y-3">
-                {/* Full Name */}
-                <div className="border-b border-slate-200 focus-within:border-blue-600 pb-1.5 flex items-center gap-2.5 transition-colors">
-                  <User className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-                  <input
-                    type="text"
-                    required
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="Full Name"
-                    className="w-full bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder-slate-400 focus:outline-none"
-                  />
-                  {isNameValid && (
-                    <div className="w-3.5 h-3.5 rounded-full border border-emerald-500 text-emerald-600 flex items-center justify-center flex-shrink-0">
-                      <Check className="w-2 h-2 stroke-[3]" />
-                    </div>
+                {/* Full Name / Display Name with real-time uniqueness check */}
+                <div className="space-y-1">
+                  <div className={`border-b ${isUsernameTaken ? 'border-rose-400' : 'border-slate-200 focus-within:border-blue-600'} pb-1.5 flex items-center gap-2.5 transition-colors`}>
+                    <User className={`w-3.5 h-3.5 ${isUsernameTaken ? 'text-rose-500' : 'text-slate-400'} flex-shrink-0`} />
+                    <input
+                      type="text"
+                      required
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      placeholder="Username / Full Name"
+                      className="w-full bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder-slate-400 focus:outline-none"
+                    />
+                    {isCheckingUsername ? (
+                      <span className="w-3.5 h-3.5 border-2 border-slate-300 border-t-blue-600 rounded-full animate-spin flex-shrink-0"></span>
+                    ) : isUsernameTaken ? (
+                      <span className="text-[10px] text-rose-500 font-bold flex-shrink-0 flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" /> Taken
+                      </span>
+                    ) : isNameValid && (
+                      <div className="w-3.5 h-3.5 rounded-full border border-emerald-500 text-emerald-600 flex items-center justify-center flex-shrink-0" title="Username available">
+                        <Check className="w-2 h-2 stroke-[3]" />
+                      </div>
+                    )}
+                  </div>
+                  {isUsernameTaken && (
+                    <p className="text-[10px] text-rose-500 font-medium pl-6">This username is already taken. Please choose another username.</p>
                   )}
                 </div>
 
@@ -585,12 +638,12 @@ export default function Auth({ initialMode = 'signup', onBack }) {
                   )}
                 </div>
 
-                {/* Action Button & Social Login Row */}
-                <div className="pt-2 flex flex-wrap items-center gap-3">
+                {/* Action Button & Google Login Row */}
+                <div className="pt-2 flex flex-wrap items-center gap-2.5">
                   <button
                     type="submit"
-                    disabled={loading}
-                    className="h-10 px-6 rounded-full bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs sm:text-sm font-semibold shadow-md shadow-blue-500/25 transition-all flex items-center gap-2.5 disabled:opacity-50"
+                    disabled={loading || isUsernameTaken}
+                    className="h-10 px-5 rounded-full bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs sm:text-sm font-semibold shadow-md shadow-blue-500/25 transition-all flex items-center gap-2 disabled:opacity-50"
                   >
                     {loading ? (
                       <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
@@ -606,35 +659,26 @@ export default function Auth({ initialMode = 'signup', onBack }) {
 
                   <span className="text-xs font-medium text-slate-400">Or</span>
 
-                  {/* Social Buttons */}
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => handleSocialAuth('facebook')}
-                      disabled={Boolean(socialLoading)}
-                      className="w-8 h-8 rounded-full border border-slate-200 hover:border-blue-500 hover:bg-blue-50/50 flex items-center justify-center transition shadow-2xs"
-                      title="Sign up with Facebook"
-                    >
-                      <svg className="w-3.5 h-3.5 fill-[#1877F2]" viewBox="0 0 24 24">
-                        <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-                      </svg>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleSocialAuth('google')}
-                      disabled={Boolean(socialLoading)}
-                      className="w-8 h-8 rounded-full border border-slate-200 hover:border-slate-300 hover:bg-slate-50 flex items-center justify-center transition shadow-2xs"
-                      title="Sign up with Google"
-                    >
-                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
+                  {/* Google OAuth Button */}
+                  <button
+                    type="button"
+                    onClick={() => handleSocialAuth('google')}
+                    disabled={Boolean(socialLoading)}
+                    className="h-10 px-3.5 rounded-full border border-slate-200 hover:border-slate-300 hover:bg-slate-50 active:scale-95 flex items-center gap-2 text-xs font-semibold text-slate-700 transition shadow-2xs"
+                    title="Sign up with Google"
+                  >
+                    {socialLoading === 'google' ? (
+                      <span className="w-3.5 h-3.5 border-2 border-slate-300 border-t-blue-600 rounded-full animate-spin"></span>
+                    ) : (
+                      <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24">
                         <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.15z"/>
                         <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"/>
                         <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.17 0 9.98 0 12s.45 3.83 1.25 5.42l4.03-3.15z"/>
                         <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
                       </svg>
-                    </button>
-                  </div>
+                    )}
+                    <span>Continue with Google</span>
+                  </button>
                 </div>
               </form>
 
@@ -796,8 +840,8 @@ export default function Auth({ initialMode = 'signup', onBack }) {
                 </a>
               </div>
 
-              {/* Action Button & Social Login Row */}
-              <div className="pt-2 flex flex-wrap items-center gap-3">
+              {/* Action Button & Google Login Row */}
+              <div className="pt-2 flex flex-wrap items-center gap-2.5">
                 <button
                   type="submit"
                   disabled={loading}
@@ -817,35 +861,26 @@ export default function Auth({ initialMode = 'signup', onBack }) {
 
                 <span className="text-xs font-medium text-slate-400">Or</span>
 
-                {/* Social Buttons */}
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => handleSocialAuth('facebook')}
-                    disabled={Boolean(socialLoading)}
-                    className="w-8 h-8 rounded-full border border-slate-200 hover:border-blue-500 hover:bg-blue-50/50 flex items-center justify-center transition shadow-2xs"
-                    title="Sign in with Facebook"
-                  >
-                    <svg className="w-3.5 h-3.5 fill-[#1877F2]" viewBox="0 0 24 24">
-                      <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-                    </svg>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleSocialAuth('google')}
-                    disabled={Boolean(socialLoading)}
-                    className="w-8 h-8 rounded-full border border-slate-200 hover:border-slate-300 hover:bg-slate-50 flex items-center justify-center transition shadow-2xs"
-                    title="Sign in with Google"
-                  >
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
+                {/* Google Sign In Button */}
+                <button
+                  type="button"
+                  onClick={() => handleSocialAuth('google')}
+                  disabled={Boolean(socialLoading)}
+                  className="h-10 px-3.5 rounded-full border border-slate-200 hover:border-slate-300 hover:bg-slate-50 active:scale-95 flex items-center gap-2 text-xs font-semibold text-slate-700 transition shadow-2xs"
+                  title="Sign in with Google"
+                >
+                  {socialLoading === 'google' ? (
+                    <span className="w-3.5 h-3.5 border-2 border-slate-300 border-t-blue-600 rounded-full animate-spin"></span>
+                  ) : (
+                    <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24">
                       <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.15z"/>
                       <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"/>
                       <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.17 0 9.98 0 12s.45 3.83 1.25 5.42l4.03-3.15z"/>
                       <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
                     </svg>
-                  </button>
-                </div>
+                  )}
+                  <span>Sign in with Google</span>
+                </button>
               </div>
             </form>
 

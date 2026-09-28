@@ -17,6 +17,7 @@ dist-ssr
 .env
 .env.*
 !.env.example
+client_secret_*.json
 
 # IDE & OS
 .vscode/

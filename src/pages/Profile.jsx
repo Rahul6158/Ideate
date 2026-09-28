@@ -15,13 +15,15 @@ import {
   LogOut
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { AVAILABLE_AVATARS } from '../data/avatars';
+import { AVAILABLE_AVATARS, getRandomAvatar } from '../data/avatars';
+import { authService } from '../services/authService';
 
 export default function Profile({ onBack }) {
   const { currentUser, updateProfile, logout, isSupabaseConfigured } = useAuth();
   
+  const initialAvatar = currentUser?.avatar_url || currentUser?.user_metadata?.avatar_url || getRandomAvatar(currentUser?.email || currentUser?.display_name);
   const [displayName, setDisplayName] = useState(currentUser?.display_name || '');
-  const [selectedAvatar, setSelectedAvatar] = useState(currentUser?.avatar_url || AVAILABLE_AVATARS[0].src);
+  const [selectedAvatar, setSelectedAvatar] = useState(initialAvatar);
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [saving, setSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
@@ -29,8 +31,9 @@ export default function Profile({ onBack }) {
 
   React.useEffect(() => {
     if (currentUser?.display_name) setDisplayName(currentUser.display_name);
-    if (currentUser?.avatar_url) setSelectedAvatar(currentUser.avatar_url);
-  }, [currentUser?.display_name, currentUser?.avatar_url]);
+    const resolvedAvatar = currentUser?.avatar_url || currentUser?.user_metadata?.avatar_url || getRandomAvatar(currentUser?.email || currentUser?.display_name);
+    if (resolvedAvatar) setSelectedAvatar(resolvedAvatar);
+  }, [currentUser]);
 
   const categories = ['All', 'Creative', 'Pro', 'Avatar'];
   
@@ -40,7 +43,8 @@ export default function Profile({ onBack }) {
 
   const handleSave = async (e) => {
     e.preventDefault();
-    if (!displayName.trim()) {
+    const cleanName = displayName.trim();
+    if (!cleanName) {
       setErrorMsg('Please enter your display name.');
       return;
     }
@@ -50,8 +54,19 @@ export default function Profile({ onBack }) {
     setSaving(true);
 
     try {
+      // Validate unique username if changed
+      const currentClean = (currentUser?.display_name || '').trim().toLowerCase();
+      if (cleanName.toLowerCase() !== currentClean) {
+        const isAvail = await authService.isDisplayNameAvailable(cleanName, currentUser?.id);
+        if (!isAvail) {
+          setErrorMsg(`The username "${cleanName}" is already taken by another user. Please choose a different username.`);
+          setSaving(false);
+          return;
+        }
+      }
+
       await updateProfile({
-        displayName: displayName.trim(),
+        displayName: cleanName,
         avatarUrl: selectedAvatar
       });
       setSuccessMsg('Your profile has been successfully updated!');

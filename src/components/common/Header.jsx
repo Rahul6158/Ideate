@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Search, Bell, Menu, ChevronDown, Layers, Shield } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, Bell, Menu, ChevronDown, Layers, Shield, User, LogOut } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { getRandomAvatar } from '../../data/avatars';
 import { notificationService } from '../../services/notificationService';
@@ -16,6 +16,7 @@ export default function Header({
   const { currentUser, logout } = useAuth();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [unreadCount, setUnreadCount] = useState(notificationService.getUnreadCount());
+  const profileMenuRef = useRef(null);
 
   useEffect(() => {
     setUnreadCount(notificationService.getUnreadCount());
@@ -23,6 +24,17 @@ export default function Header({
       setUnreadCount(notificationService.getUnreadCount());
     });
     return unsub;
+  }, []);
+
+  // Close profile dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target)) {
+        setShowProfileMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   const isAdmin = currentUser?.role === 'admin' || currentUser?.email === 'tushrahul58@gmail.com';
@@ -94,70 +106,89 @@ export default function Header({
           )}
         </button>
 
-        {/* User Pill Dropdown */}
-        <div className="relative">
+        {/* User Pill Dropdown - Positioned directly under the account holder's name */}
+        <div className="relative" ref={profileMenuRef}>
           <button
-            onClick={() => setShowProfileMenu(!showProfileMenu)}
-            className="flex items-center gap-2 p-1 sm:px-2 sm:py-1 rounded-xl hover:bg-slate-100 transition"
+            type="button"
+            onClick={() => setShowProfileMenu(prev => !prev)}
+            className={`flex items-center gap-2 p-1 sm:px-2.5 sm:py-1.5 rounded-2xl transition border ${
+              showProfileMenu 
+                ? 'bg-slate-100 border-slate-300 shadow-xs' 
+                : 'hover:bg-slate-100 border-transparent'
+            }`}
+            title="Account Menu"
           >
             <img
-              src={currentUser?.avatar_url || getRandomAvatar(currentUser?.email || currentUser?.display_name || 'Rahul')}
-              alt={currentUser?.display_name}
-              className="w-8 h-8 rounded-full object-cover ring-2 ring-white shadow-sm"
+              src={currentUser?.avatar_url || getRandomAvatar(currentUser?.email || currentUser?.display_name || 'User')}
+              alt={currentUser?.display_name || 'Account'}
+              className="w-8 h-8 rounded-full object-cover ring-2 ring-white shadow-2xs flex-shrink-0 bg-slate-100"
             />
-            <span className="hidden sm:inline-block text-sm font-semibold text-slate-800">
-              {currentUser?.display_name || 'Rahul'}
+            <span className="inline-block text-xs sm:text-sm font-bold text-slate-800 tracking-tight">
+              {currentUser?.display_name || 'User'}
             </span>
-            <ChevronDown className="hidden sm:inline-block w-4 h-4 text-slate-400" />
+            <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${showProfileMenu ? 'rotate-180 text-blue-600' : ''}`} />
           </button>
 
           {showProfileMenu && (
             <div 
-              className="absolute right-0 top-full mt-2 w-52 bg-white rounded-2xl shadow-xl border border-slate-200/80 p-2 z-30 animate-fade-in"
-              onMouseLeave={() => setShowProfileMenu(false)}
+              className="absolute right-0 sm:left-1/2 sm:-translate-x-1/2 top-full mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-slate-200/90 p-2 z-50 animate-scale-in"
             >
-              <div className="px-3 py-1.5 text-xs">
+              {/* Pointer triangle centered under account name */}
+              <div className="hidden sm:block absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-t border-l border-slate-200/80 rotate-45"></div>
+
+              {/* User details header */}
+              <div className="px-3 py-2 text-xs relative z-10">
                 <div className="flex items-center gap-1.5">
-                  <p className="font-bold text-slate-900 truncate">{currentUser?.display_name}</p>
+                  <p className="font-bold text-slate-900 truncate">{currentUser?.display_name || 'Member'}</p>
                   {isAdmin && (
-                    <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-purple-100 text-purple-700">Admin</span>
+                    <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-purple-100 text-purple-700">Admin</span>
                   )}
                 </div>
-                <p className="text-slate-400 truncate text-[11px]">{currentUser?.email}</p>
+                <p className="text-slate-400 truncate text-[11px] mt-0.5">{currentUser?.email}</p>
               </div>
+
               <div className="border-t border-slate-100 my-1"></div>
 
-              {isAdmin && (
+              {/* Options: Profile, Logout (+ Admin if admin) */}
+              <div className="space-y-0.5 relative z-10">
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowProfileMenu(false);
+                      if (onOpenAdmin) onOpenAdmin();
+                    }}
+                    className="w-full text-left px-3 py-2 text-xs text-purple-700 font-bold hover:bg-purple-50 rounded-xl flex items-center gap-2 transition"
+                  >
+                    <Shield className="w-3.5 h-3.5 text-purple-600" />
+                    <span>Admin Console</span>
+                  </button>
+                )}
+
                 <button
+                  type="button"
                   onClick={() => {
                     setShowProfileMenu(false);
-                    if (onOpenAdmin) onOpenAdmin();
+                    if (onOpenProfile) onOpenProfile();
                   }}
-                  className="w-full text-left px-3 py-1.5 text-xs text-purple-700 font-bold hover:bg-purple-50 rounded-xl flex items-center gap-2 mb-1"
+                  className="w-full text-left px-3 py-2 text-xs text-slate-700 font-bold hover:bg-slate-50 hover:text-blue-600 rounded-xl flex items-center gap-2 transition"
                 >
-                  <Shield className="w-3.5 h-3.5 text-purple-600" />
-                  <span>Admin Console</span>
+                  <User className="w-3.5 h-3.5 text-blue-500" />
+                  <span>Profile</span>
                 </button>
-              )}
 
-              <button
-                onClick={() => {
-                  setShowProfileMenu(false);
-                  if (onOpenProfile) onOpenProfile();
-                }}
-                className="w-full text-left px-3 py-1.5 text-xs text-slate-700 font-semibold hover:bg-slate-50 rounded-xl flex items-center gap-2"
-              >
-                <span>My Profile</span>
-              </button>
-              <button
-                onClick={() => {
-                  setShowProfileMenu(false);
-                  logout();
-                }}
-                className="w-full text-left px-3 py-1.5 text-xs text-rose-600 font-medium hover:bg-rose-50 rounded-xl flex items-center gap-2"
-              >
-                <span>Log out</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowProfileMenu(false);
+                    logout();
+                  }}
+                  className="w-full text-left px-3 py-2 text-xs text-rose-600 font-bold hover:bg-rose-50 rounded-xl flex items-center gap-2 transition"
+                >
+                  <LogOut className="w-3.5 h-3.5 text-rose-500" />
+                  <span>Logout</span>
+                </button>
+              </div>
             </div>
           )}
         </div>

@@ -66,6 +66,12 @@ export function AuthProvider({ children }) {
     return await authService.signInWithOAuth(provider);
   };
 
+  const signInWithGoogle = async () => {
+    const user = await authService.signInWithGoogle();
+    setCurrentUser(user);
+    return user;
+  };
+
   const updateProfile = async (updates) => {
     const updatedUser = await authService.updateProfile(updates);
     setCurrentUser(updatedUser);
@@ -84,6 +90,7 @@ export function AuthProvider({ children }) {
       signup,
       logout,
       signInWithOAuth,
+      signInWithGoogle,
       updateProfile,
       resendConfirmationEmail,
       isSupabaseConfigured
