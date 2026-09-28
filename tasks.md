@@ -28,11 +28,11 @@
   - Idea owners receive an interactive card in `Notifications` to "Accept Request" (which adds them as `member`) or "Decline".
   - *Files*: `src/components/ideas/JoinIdeaModal.jsx`, `src/services/memberService.js`, `src/pages/Notifications.jsx`, `src/components/common/Header.jsx`, `src/components/common/Sidebar.jsx`, `src/App.jsx`
 
-- [x] **Web Push Notifications**:
+- [x] **Web Push Notifications & Cross-Device Delivery**:
   - Implemented full Web Push notification architecture with Service Worker (`public/service-worker.js`), badge/icons, and notification click navigation.
-  - Added `push_subscriptions` database schema with multi-device support, indexes, and strict user-isolated RLS policies.
-  - Created frontend `pushNotificationService` and `usePushNotifications` hook with automatic Service Worker registration.
+  - Fixed mobile browser notification issue where mobile browsers (Android Chrome, iOS PWA) threw `TypeError: Illegal constructor` when invoking `new Notification()`; transitioned to `ServiceWorkerRegistration.showNotification()` with fallbacks, vibrate, badge, and navigation metadata.
+  - Added multi-device Web Push server pipeline (`server/webPushServer.js`, `api/register-push.js`, `api/send-push.js`) using `web-push` with VAPID signing, Vite dev-server middleware, and persistent storage.
+  - Added automatic background subscription synchronization on app initialization (`syncSubscription`), automatically pairing devices when logged in without requiring manual toggle.
+  - Connected `notifyPostCreated` to both real-time Supabase channels, in-app notifications, and push endpoints for discussions.
   - Added `NotificationSettings` UI in `Profile.jsx` and opt-in prompt banner in `Notifications.jsx` with test notification trigger.
-  - Created Supabase Edge Functions (`register-push`, `delete-push`, `send-push` with `@supabase/server` and `web-push`).
-  - Added post creation notification dispatcher in `postService.js` and deep-link routing in `App.jsx`.
-  - *Files*: `public/service-worker.js`, `src/services/pushNotifications.js`, `src/hooks/usePushNotifications.js`, `src/components/common/NotificationSettings.jsx`, `supabase/migrations/20260929_push_notifications.sql`, `supabase/functions/send-push/index.ts`, `supabase/functions/register-push/index.ts`, `supabase/functions/delete-push/index.ts`
+  - *Files*: `public/service-worker.js`, `src/services/pushNotifications.js`, `src/services/notificationService.js`, `src/hooks/usePushNotifications.js`, `server/webPushServer.js`, `api/register-push.js`, `api/send-push.js`, `vite.config.js`
