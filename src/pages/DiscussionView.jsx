@@ -11,7 +11,9 @@ import {
   Eraser,
   Settings,
   Copy,
-  Check
+  Check,
+  Bell,
+  BellOff
 } from 'lucide-react';
 import PostItem from '../components/posts/PostItem';
 import PostComposer from '../components/posts/PostComposer';
@@ -25,6 +27,7 @@ import { memberService } from '../services/memberService';
 import { useAuth } from '../context/AuthContext';
 import { getRandomAvatar } from '../data/avatars';
 import { notificationService } from '../services/notificationService';
+import { pushNotificationService } from '../services/pushNotifications';
 import { getIdeaTheme } from '../data/themePalettes';
 import LoadingScreen from '../components/common/LoadingScreen';
 
@@ -40,7 +43,20 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
   const [showDescriptionTooltip, setShowDescriptionTooltip] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
+  const [isMuted, setIsMuted] = useState(() =>
+    pushNotificationService.isIdeaMuted(currentUser?.id, idea?.id)
+  );
   const settingsMenuRef = useRef(null);
+
+  useEffect(() => {
+    setIsMuted(pushNotificationService.isIdeaMuted(currentUser?.id, idea?.id));
+  }, [currentUser?.id, idea?.id]);
+
+  const handleToggleMuteIdea = async () => {
+    if (!currentUser?.id || !idea?.id) return;
+    const updated = await pushNotificationService.toggleMuteIdea(currentUser.id, idea.id);
+    setIsMuted(Array.isArray(updated?.muted_ideas) && updated.muted_ideas.includes(idea.id));
+  };
 
   // Close settings menu on click outside
   useEffect(() => {
@@ -183,16 +199,6 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
         return [...prev, newPost];
       });
       if (onUpdateIdeaStats) onUpdateIdeaStats(idea.id);
-
-      // Trigger notification and sound
-      const hasAudio = postData.attachments?.some(a => a.file_type === 'audio');
-      notificationService.addNotification({
-        title: hasAudio ? `Voice Note Posted in "${idea.title}" 🎙️` : `Discussion Posted in "${idea.title}" 💬`,
-        message: `${currentUser?.display_name || 'You'}: "${(postData.content || (hasAudio ? 'Voice message' : 'New attachment')).slice(0, 80)}"`,
-        type: hasAudio ? 'voice' : 'discussion',
-        ideaId: idea.id,
-        playSound: true
-      });
 
       // Smooth scroll down to new post
       setTimeout(() => {
@@ -375,6 +381,24 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
           >
             <Plus className="w-3.5 h-3.5" />
             <span className="hidden md:inline">Invite</span>
+          </button>
+
+          {/* Mute / Unmute Idea Notifications Toggle */}
+          <button
+            type="button"
+            onClick={handleToggleMuteIdea}
+            className={`p-1.5 rounded-xl border transition shadow-2xs flex items-center gap-1 text-xs font-semibold ${
+              isMuted
+                ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                : 'bg-white/90 hover:bg-white text-slate-600 border-slate-200/80'
+            }`}
+            title={isMuted ? 'Notifications muted for this idea (Click to unmute)' : 'Mute notifications for this idea'}
+          >
+            {isMuted ? (
+              <BellOff className="w-3.5 h-3.5 text-amber-600" />
+            ) : (
+              <Bell className="w-3.5 h-3.5 text-slate-500" />
+            )}
           </button>
 
           {/* Clear All My Messages Button (only shown if user has sent messages in this idea) */}

@@ -10,31 +10,39 @@ create table if not exists public.push_subscriptions (
   endpoint text not null unique,
   p256dh text not null,
   auth text not null,
+  device_name text,
   device_label text,
-  created_at timestamptz default timezone('utc'::text, now()) not null,
+  created_at timestamptz default timezone('utc'::text, now()) not n ll,
   last_used_at timestamptz default timezone('utc'::text, now()) not null
 );
+
+alter table public.push_subscriptions add column if not exists device_name text;
+alter table public.push_subscriptions add column if not exists device_label text;
 
 -- Enable RLS on push_subscriptions
 alter table public.push_subscriptions enable row level security;
 
 -- Policies for push_subscriptions
 -- Users can only view, register, update, and remove their own device subscriptions
+drop policy if exists "Users can view their own push subscriptions" on public.push_subscriptions;
 create policy "Users can view their own push subscriptions"
   on public.push_subscriptions for select
   to authenticated
   using (auth.uid() = user_id);
 
+drop policy if exists "Users can register their own push subscriptions" on public.push_subscriptions;
 create policy "Users can register their own push subscriptions"
   on public.push_subscriptions for insert
   to authenticated
   with check (auth.uid() = user_id);
 
+drop policy if exists "Users can update their own push subscriptions" on public.push_subscriptions;
 create policy "Users can update their own push subscriptions"
   on public.push_subscriptions for update
   to authenticated
   using (auth.uid() = user_id);
 
+drop policy if exists "Users can delete their own push subscriptions" on public.push_subscriptions;
 create policy "Users can delete their own push subscriptions"
   on public.push_subscriptions for delete
   to authenticated
@@ -64,21 +72,25 @@ create table if not exists public.notifications (
 alter table public.notifications enable row level security;
 
 -- Policies for notifications
+drop policy if exists "Users can view their own notifications" on public.notifications;
 create policy "Users can view their own notifications"
   on public.notifications for select
   to authenticated
   using (auth.uid() = user_id);
 
+drop policy if exists "Authenticated users can insert notifications" on public.notifications;
 create policy "Authenticated users can insert notifications"
   on public.notifications for insert
   to authenticated
   with check (true);
 
+drop policy if exists "Users can update their own notifications" on public.notifications;
 create policy "Users can update their own notifications"
   on public.notifications for update
   to authenticated
   using (auth.uid() = user_id);
 
+drop policy if exists "Users can delete their own notifications" on public.notifications;
 create policy "Users can delete their own notifications"
   on public.notifications for delete
   to authenticated
@@ -110,5 +122,6 @@ as $$
     where idea_id = p_idea_id
       and user_id != p_author_id
       and role != 'pending_invite'
+      and role != 'pending_join'
   ) u;
 $$;

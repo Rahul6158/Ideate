@@ -421,7 +421,6 @@ export const notificationService = {
     }
 
     currentSubscribedUserId = userId;
-    this.requestBrowserPermission();
     this.fetchNotifications(userId);
     this.fetchUnreadCounts(userId);
 
@@ -438,19 +437,60 @@ export const notificationService = {
         (payload) => {
           const notif = payload.new;
           if (notif) {
-            this._cachedNotifications = [notif, ...this._cachedNotifications.filter(n => n.id !== notif.id)];
-            localStorage.setItem(STORAGE_KEY_NOTIFICATIONS, JSON.stringify(this._cachedNotifications));
-            playNotificationSound();
-            this.showDesktopNotification(
-              notif.title,
-              notif.message || notif.body,
-              '/icons/notification-icon.png',
-              {
-                ideaId: notif.idea_id,
-                postId: notif.post_id,
-                url: notif.idea_id ? `/?ideaId=${notif.idea_id}` : '/'
-              }
+            // Never notify the actor about their own action
+            if (notif.actor_id && notif.actor_id === userId) {
+              return;
+            }
+
+            this._cachedNotifications = [
+              notif,
+              ...this._cachedNotifications.filter((n) => n.id !== notif.id)
+            ];
+            localStorage.setItem(
+              STORAGE_KEY_NOTIFICATIONS,
+              JSON.stringify(this._cachedNotifications)
             );
+
+            // Check user's notification preferences & muted ideas before playing sound or showing alert
+            let allowAlert = true;
+            try {
+              const rawPrefs = localStorage.getItem(`ideate_push_prefs_v1_${userId}`);
+              if (rawPrefs) {
+                const prefs = JSON.parse(rawPrefs);
+                if (
+                  notif.idea_id &&
+                  Array.isArray(prefs.muted_ideas) &&
+                  prefs.muted_ideas.includes(notif.idea_id)
+                ) {
+                  allowAlert = false;
+                } else if (notif.type === 'mention' && prefs.mentions === false) {
+                  allowAlert = false;
+                } else if (notif.type === 'new_post' && prefs.new_messages === false) {
+                  allowAlert = false;
+                }
+              }
+            } catch (_) {}
+
+            if (allowAlert) {
+              playNotificationSound();
+              // Only show foreground desktop notification if document is hidden or user does not have an active push endpoint (avoids duplicate OS popups when Web Push already delivers)
+              const hasActivePushEndpoint = Boolean(
+                localStorage.getItem('ideate_push_endpoint_v1')
+              );
+              if (!hasActivePushEndpoint) {
+                this.showDesktopNotification(
+                  notif.title,
+                  notif.message || notif.body,
+                  '/icons/icon-192.png',
+                  {
+                    ideaId: notif.idea_id,
+                    postId: notif.post_id,
+                    url: notif.idea_id ? `/?ideaId=${notif.idea_id}` : '/'
+                  }
+                );
+              }
+            }
+
             this.fetchUnreadCounts(userId);
             this._notifyListeners();
           }
@@ -464,7 +504,6 @@ export const notificationService = {
           table: 'posts'
         },
         (payload) => {
-          // New post inserted: re-fetch unread counts so the sidebar immediately displays the badge!
           const post = payload.new;
           if (post && post.user_id !== userId) {
             this.fetchUnreadCounts(userId);
@@ -475,7 +514,7 @@ export const notificationService = {
   },
 
   /**
-   * Dispatch notification when a new post is published in an idea discussion
+   * Dispatch in-app and background Web Push notifications when a new post is created
    */
   async notifyPostCreated({ post, ideaId, authorUser }) {
     if (!ideaId || !authorUser?.id) return;
@@ -487,81 +526,137 @@ export const notificationService = {
         .eq('id', ideaId)
         .single();
 
-      const ideaTitle = idea?.title || 'Idea Discussion';
-      const authorName = authorUser.display_name || authorUser.email?.split('@')[0] || 'Someone';
-      const contentSnippet = post.content
-        ? (post.content.length > 120 ? post.content.substring(0, 117) + '...' : post.content)
-        : 'Shared a new update in discussion.';
+      if (!idea) return;
 
-      // Find authorized members (excluding the author)
+      const ideaTitle = idea.title || 'Idea Discussion';
+      const authorName =
+        authorUser.display_name || authorUser.email?.split('@')[0] || 'Someone';
+      const contentText = (post.content || '').trim();
+      const contentSnippet = contentText
+        ? contentText.length > 140
+          ? contentText.substring(0, 137) + '...'
+          : contentText
+        : 'Shared a new attachment in the discussion.';
+
+      // Strictly find active authorized members + idea owner (excluding the sender & pending invites/requests)
       const { data: members } = await supabase
         .from('idea_members')
-        .select('user_id')
+        .select('user_id, role')
         .eq('idea_id', ideaId)
         .neq('user_id', authorUser.id)
-        .neq('role', 'pending_invite');
+        .neq('role', 'pending_invite')
+        .neq('role', 'pending_join');
 
       const recipientSet = new Set();
-      if (idea?.owner_id && idea.owner_id !== authorUser.id) {
+      if (idea.owner_id && idea.owner_id !== authorUser.id) {
         recipientSet.add(idea.owner_id);
       }
-      if (members) {
-        members.forEach(m => recipientSet.add(m.user_id));
+      if (Array.isArray(members)) {
+        members.forEach((m) => {
+          if (m.user_id && m.user_id !== authorUser.id) {
+            recipientSet.add(m.user_id);
+          }
+        });
       }
-
-      // Also include any users who participated in this discussion thread
-      try {
-        const { data: threadPosts } = await supabase
-          .from('posts')
-          .select('user_id')
-          .eq('idea_id', ideaId)
-          .neq('user_id', authorUser.id);
-        if (Array.isArray(threadPosts)) {
-          threadPosts.forEach(p => {
-            if (p.user_id) recipientSet.add(p.user_id);
-          });
-        }
-      } catch (_) {}
 
       const recipientIds = Array.from(recipientSet);
       if (recipientIds.length === 0) return;
 
-      const notifications = recipientIds.map(uid => ({
-        user_id: uid,
-        actor_id: authorUser.id,
-        idea_id: ideaId,
-        post_id: post.id,
-        type: 'new_post',
-        title: `${authorName} posted in "${ideaTitle}"`,
-        message: contentSnippet,
-        body: contentSnippet,
-        is_read: false
-      }));
+      // Detect @mentions and direct replies among recipients
+      const isMentionMap = {};
+      try {
+        const { data: recipientProfiles } = await supabase
+          .from('profiles')
+          .select('id, display_name, email')
+          .in('id', recipientIds);
+
+        const lowerContent = contentText.toLowerCase();
+        const replyTargetUserId = post.reply_to?.user_id || null;
+        const replyTargetAuthor = (post.reply_to?.author_name || '').toLowerCase();
+
+        if (Array.isArray(recipientProfiles)) {
+          recipientProfiles.forEach((prof) => {
+            const dName = (prof.display_name || '').trim().toLowerCase();
+            const emailPrefix = (prof.email || '').split('@')[0].toLowerCase();
+
+            const mentionedByName =
+              (dName && lowerContent.includes(`@${dName}`)) ||
+              (emailPrefix && lowerContent.includes(`@${emailPrefix}`));
+            const isRepliedTo =
+              (replyTargetUserId && replyTargetUserId === prof.id) ||
+              (replyTargetAuthor && dName && replyTargetAuthor === dName);
+
+            if (mentionedByName || isRepliedTo) {
+              isMentionMap[prof.id] = {
+                mentioned: true,
+                title: mentionedByName
+                  ? `${authorName} mentioned you in ${ideaTitle}`
+                  : `${authorName} replied to you in ${ideaTitle}`
+              };
+            }
+          });
+        }
+      } catch (_) {}
+
+      const notifications = recipientIds.map((uid) => {
+        const mentionInfo = isMentionMap[uid];
+        return {
+          user_id: uid,
+          actor_id: authorUser.id,
+          idea_id: ideaId,
+          post_id: post.id,
+          type: mentionInfo ? 'mention' : 'new_post',
+          title: mentionInfo
+            ? mentionInfo.title
+            : `${authorName} in ${ideaTitle}`,
+          message: contentSnippet,
+          body: contentSnippet,
+          is_read: false
+        };
+      });
 
       await supabase.from('notifications').insert(notifications);
 
-      // 1. Dispatch Web Push notification via local / Vercel API endpoint
+      // Build auth header for backend push delivery
+      const headers = { 'Content-Type': 'application/json' };
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (sessionData?.session?.access_token) {
+          headers.Authorization = `Bearer ${sessionData.session.access_token}`;
+        }
+      } catch (_) {}
+
+      // 1. Dispatch Web Push notification via /api/send-push (Vercel Serverless & Local Dev)
       try {
         await fetch('/api/send-push', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             recipientIds,
             ideaId,
             postId: post.id,
-            title: `${authorName} posted in "${ideaTitle}"`,
+            title: `${authorName} in ${ideaTitle}`,
             body: contentSnippet,
-            authorId: authorUser.id
+            authorId: authorUser.id,
+            isMentionMap
           })
         });
       } catch (pushErr) {
         console.warn('[Push Service] Delivery via /api/send-push failed:', pushErr.message);
       }
 
-      // 2. Also invoke Edge Function send-push if available
+      // 2. Also invoke Supabase Edge Function send-push-notification if deployed
       try {
-        await supabase.functions.invoke('send-push', {
-          body: { record: { ...post, idea_id: ideaId, user_id: authorUser.id } }
+        await supabase.functions.invoke('send-push-notification', {
+          body: {
+            record: {
+              ...post,
+              idea_id: ideaId,
+              user_id: authorUser.id,
+              title: `${authorName} in ${ideaTitle}`,
+              body: contentSnippet
+            }
+          }
         });
       } catch (_) {}
     } catch (err) {

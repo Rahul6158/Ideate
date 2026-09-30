@@ -4,5 +4,8 @@ verify_jwt = true
 [functions.delete-push]
 verify_jwt = true
 
+[functions.send-push-notification]
+verify_jwt = false
+
 [functions.send-push]
 verify_jwt = false

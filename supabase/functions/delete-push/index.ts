@@ -3,46 +3,45 @@ import { withSupabase } from 'npm:@supabase/server';
 export default {
   fetch: withSupabase({ auth: 'user' }, async (req, ctx) => {
     if (req.method !== 'POST' && req.method !== 'DELETE') {
-      return new Response(JSON.stringify({ error: 'Method not allowed' }), {
-        status: 405,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return Response.json({ error: 'Method not allowed' }, { status: 405 });
     }
 
     try {
-      const body = await req.json();
-      const { endpoint } = body;
+      const userId = ctx.userClaims?.sub || (ctx as any).user?.id;
+      if (!userId) {
+        return Response.json({ error: 'Unauthorized' }, { status: 401 });
+      }
 
-      if (!endpoint) {
-        return new Response(
-          JSON.stringify({ error: 'Missing subscription endpoint' }),
-          { status: 400, headers: { 'Content-Type': 'application/json' } }
+      const body = await req.json();
+      const { endpoint, id } = body;
+
+      if (!endpoint && !id) {
+        return Response.json(
+          { error: 'Missing subscription endpoint or id' },
+          { status: 400 }
         );
       }
 
-      // Delete only the subscription matching the authenticated user
-      const { error } = await ctx.supabase
+      let query = ctx.supabaseAdmin
         .from('push_subscriptions')
         .delete()
-        .eq('endpoint', endpoint)
-        .eq('user_id', ctx.user.id);
+        .eq('user_id', userId);
 
-      if (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        });
+      if (id) {
+        query = query.eq('id', id);
+      } else {
+        query = query.eq('endpoint', endpoint);
       }
 
-      return new Response(JSON.stringify({ success: true }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    } catch (err) {
-      return new Response(JSON.stringify({ error: err.message }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      const { error } = await query;
+
+      if (error) {
+        return Response.json({ error: error.message }, { status: 500 });
+      }
+
+      return Response.json({ success: true });
+    } catch (err: any) {
+      return Response.json({ error: err.message }, { status: 400 });
     }
   })
 };

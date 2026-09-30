@@ -6,8 +6,19 @@ export default async function handler(req, res) {
   }
 
   try {
+    const authHeader = req.headers?.authorization || req.headers?.Authorization || '';
+    const accessToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    const { recipientIds, ideaId, postId, title, body: messageBody, authorId } = body || {};
+    const {
+      recipientIds,
+      ideaId,
+      postId,
+      title,
+      body: messageBody,
+      authorId,
+      isMentionMap
+    } = body || {};
 
     if (!Array.isArray(recipientIds) || recipientIds.length === 0) {
       return res.status(400).json({ error: 'No recipientIds provided' });
@@ -17,9 +28,11 @@ export default async function handler(req, res) {
       recipientIds,
       ideaId,
       postId,
-      title: title || 'New activity in Ideate',
+      title: title || 'New message on Ideate',
       body: messageBody || 'Someone posted in your discussion. Tap to view.',
-      authorId
+      authorId,
+      isMentionMap: isMentionMap || {},
+      accessToken
     });
 
     return res.status(200).json({ success: true, result });

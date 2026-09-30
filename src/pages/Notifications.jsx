@@ -25,12 +25,14 @@ import { memberService } from '../services/memberService';
 import { getSoundSettings, setSoundSettings, playNotificationSound } from '../utils/soundEffects';
 import { useAuth } from '../context/AuthContext';
 import { usePushNotifications } from '../hooks/usePushNotifications';
+import NotificationSettings from '../components/common/NotificationSettings';
 
 export default function Notifications({ onBack, onSelectIdea, onRefreshIdeas }) {
   const { currentUser } = useAuth();
   const { isSupported: isPushSupported, isSubscribed: isPushSubscribed, permission: pushPermission, subscribe: subscribePush } = usePushNotifications();
   const [notifications, setNotifications] = useState([]);
   const [filter, setFilter] = useState('all'); // 'all' | 'unread' | 'ideas' | 'system'
+  const [showPushSettings, setShowPushSettings] = useState(false);
   const [soundSettings, setSoundState] = useState(getSoundSettings());
   const [actionNotice, setActionNotice] = useState('');
 
@@ -396,36 +398,23 @@ export default function Notifications({ onBack, onSelectIdea, onRefreshIdeas }) 
           </div>
         )}
 
-        {/* Web Push Notification Opt-in Prompt Banner */}
-        {isPushSupported && !isPushSubscribed && pushPermission !== 'denied' && (
-          <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 rounded-2xl p-4 sm:p-5 text-white shadow-md shadow-blue-500/15 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fade-in">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center flex-shrink-0">
-                <BellRing className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h4 className="text-sm font-bold leading-tight">Enable Device Push Notifications</h4>
-                <p className="text-xs text-blue-100 mt-0.5">
-                  Get instant alerts when team members post in discussions, even when Ideate is closed.
-                </p>
-              </div>
-            </div>
+        {/* Web Push & Device Notification Settings Panel */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
             <button
               type="button"
-              onClick={async () => {
-                try {
-                  await subscribePush();
-                  setActionNotice('Push notifications enabled for this device!');
-                } catch (e) {
-                  setActionNotice(e.message || 'Could not enable push');
-                }
-              }}
-              className="px-4 py-2 rounded-xl bg-white text-blue-700 hover:bg-blue-50 font-bold text-xs transition shadow-sm self-start sm:self-center flex-shrink-0 active:scale-95"
+              onClick={() => setShowPushSettings((prev) => !prev)}
+              className="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1.5"
             >
-              Turn On Push
+              <BellRing className="w-3.5 h-3.5" />
+              <span>{showPushSettings ? 'Hide Push & Device Settings' : 'Push & Device Notification Settings'}</span>
             </button>
           </div>
-        )}
+
+          {(showPushSettings || !isPushSubscribed) && (
+            <NotificationSettings compact={isPushSubscribed && !showPushSettings} />
+          )}
+        </div>
 
         {/* Audio / Sound Settings Banner */}
         <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-xs">

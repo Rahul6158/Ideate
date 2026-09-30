@@ -1,5 +1,5 @@
 // ==============================================================================
-// Ideate — Root-Scoped Web Push Service Worker (/service-worker.js)
+// Ideate — Root-Scoped Web Push Service Worker (/sw.js)
 // Receives background Web Push events even when all Ideate tabs are closed,
 // displays native OS notifications, deduplicates messages, and routes clicks.
 // ==============================================================================
@@ -18,6 +18,9 @@ function rememberNotificationId(id) {
   return false;
 }
 
+/**
+ * Validate and normalize a target URL so it is strictly same-origin
+ */
 function resolveSafeUrl(rawUrl, ideaId, postId) {
   const fallbackPath = ideaId
     ? `/?ideaId=${encodeURIComponent(ideaId)}${postId ? `&postId=${encodeURIComponent(postId)}` : ''}`
@@ -34,14 +37,20 @@ function resolveSafeUrl(rawUrl, ideaId, postId) {
   }
 }
 
+// Install event — activate immediately
 self.addEventListener('install', () => {
   self.skipWaiting();
 });
 
+// Activate event — claim all clients immediately
 self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+// ==============================================================================
+// 1. PUSH EVENT HANDLER
+// Invoked by the browser push service even when Ideate is closed
+// ==============================================================================
 self.addEventListener('push', (event) => {
   let data = {};
 
@@ -62,6 +71,7 @@ self.addEventListener('push', (event) => {
   const postId = data.postId || data.post_id || nestedData.postId || nestedData.post_id || null;
   const dedupeKey = postId ? `post:${postId}` : (data.dedupeKey || nestedData.dedupeKey || null);
 
+  // Prevent duplicate push notifications for the same message ID
   if (dedupeKey && rememberNotificationId(dedupeKey)) {
     return;
   }
@@ -104,6 +114,10 @@ self.addEventListener('push', (event) => {
   );
 });
 
+// ==============================================================================
+// 2. NOTIFICATION CLICK HANDLER
+// Focuses an existing Ideate window or opens a new one to the target idea
+// ==============================================================================
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
@@ -125,6 +139,7 @@ self.addEventListener('notificationclick', (event) => {
       .then(async (windows) => {
         for (const windowClient of windows) {
           if (windowClient.url && windowClient.url.startsWith(self.location.origin)) {
+            // Notify the React app to switch directly to the idea without a full reload if possible
             try {
               windowClient.postMessage({
                 type: 'NAVIGATE_IDEA',
@@ -153,6 +168,10 @@ self.addEventListener('notificationclick', (event) => {
   );
 });
 
+// ==============================================================================
+// 3. PUSH SUBSCRIPTION CHANGE HANDLER
+// Handles automatic browser endpoint rotation
+// ==============================================================================
 self.addEventListener('pushsubscriptionchange', (event) => {
   event.waitUntil(
     (async () => {
@@ -173,6 +192,9 @@ self.addEventListener('pushsubscriptionchange', (event) => {
   );
 });
 
+// ==============================================================================
+// 4. MESSAGE LISTENER
+// ==============================================================================
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
