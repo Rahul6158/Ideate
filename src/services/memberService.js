@@ -191,55 +191,93 @@ export const memberService = {
 
   async acceptInvite(ideaId, userId) {
     if (isSupabaseConfigured) {
-      // Update role to 'member'
-      const { error } = await supabase
+      // 1. Try updating role to 'member' and return updated rows
+      const { data: updatedRows, error: updateError } = await supabase
         .from('idea_members')
         .update({ role: 'member' })
-        .match({ idea_id: ideaId, user_id: userId });
+        .match({ idea_id: ideaId, user_id: userId })
+        .select('id, role');
 
-      if (error) throw error;
-
-      // Update members count on idea
-      try {
-        const { count } = await supabase
+      // 2. If RLS blocked UPDATE (0 rows affected) or update failed, use delete + insert
+      if (updateError || !updatedRows || updatedRows.length === 0) {
+        const { error: delErr } = await supabase
           .from('idea_members')
-          .select('id', { count: 'exact', head: true })
-          .eq('idea_id', ideaId)
-          .neq('role', 'pending_invite')
-          .neq('role', 'pending_join');
+          .delete()
+          .match({ idea_id: ideaId, user_id: userId });
 
-        const { data: ideaData } = await supabase
-          .from('ideas')
-          .update({
-            members_count: (count || 0) + 1,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', ideaId)
-          .select('title, owner_id')
-          .single();
+        if (delErr) throw delErr;
 
-        // Get accepting user profile
-        const { data: userProfile } = await supabase
-          .from('profiles')
-          .select('display_name, email')
-          .eq('id', userId)
-          .single();
-
-        const name = userProfile?.display_name || userProfile?.email || 'A collaborator';
-
-        // Notify idea owner
-        if (ideaData?.owner_id) {
-          await supabase.from('notifications').insert({
-            user_id: ideaData.owner_id,
+        const { error: insErr } = await supabase
+          .from('idea_members')
+          .insert({
             idea_id: ideaId,
-            title: 'Invitation Accepted 🎉',
-            message: `${name} accepted your invitation to "${ideaData.title || 'Idea'}".`,
-            type: 'member'
+            user_id: userId,
+            role: 'member'
           });
+
+        if (insErr && insErr.code !== '23505') {
+          throw insErr;
         }
-      } catch (e) {
-        console.warn('Accept invite notification notice:', e);
       }
+
+      // 3. Run secondary updates (members_count, owner notification, cleanup invite notification) in background for instant mobile response
+      (async () => {
+        try {
+          const [countRes, ideaRes, profileRes] = await Promise.allSettled([
+            supabase
+              .from('idea_members')
+              .select('id', { count: 'exact', head: true })
+              .eq('idea_id', ideaId)
+              .neq('role', 'pending_invite')
+              .neq('role', 'pending_join'),
+            supabase
+              .from('ideas')
+              .select('title, owner_id')
+              .eq('id', ideaId)
+              .single(),
+            supabase
+              .from('profiles')
+              .select('display_name, email')
+              .eq('id', userId)
+              .single(),
+            // Mark any pending invite notifications for this idea as read & accepted
+            supabase
+              .from('notifications')
+              .update({
+                is_read: true,
+                type: 'member',
+                title: 'Invitation Accepted ✅',
+                viewed_at: new Date().toISOString()
+              })
+              .match({ user_id: userId, idea_id: ideaId, type: 'invite' })
+          ]);
+
+          const count = countRes.status === 'fulfilled' ? (countRes.value.count || 0) : 1;
+          const ideaData = ideaRes.status === 'fulfilled' ? ideaRes.value.data : null;
+          const userProfile = profileRes.status === 'fulfilled' ? profileRes.value.data : null;
+
+          await Promise.allSettled([
+            supabase
+              .from('ideas')
+              .update({
+                members_count: count + 1,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', ideaId),
+            ideaData?.owner_id
+              ? supabase.from('notifications').insert({
+                  user_id: ideaData.owner_id,
+                  idea_id: ideaId,
+                  title: 'Invitation Accepted 🎉',
+                  message: `${userProfile?.display_name || userProfile?.email || 'A collaborator'} accepted your invitation to "${ideaData.title || 'Idea'}".`,
+                  type: 'member'
+                })
+              : Promise.resolve()
+          ]);
+        } catch (e) {
+          console.warn('Accept invite background update notice:', e);
+        }
+      })();
 
       return true;
     }
@@ -263,7 +301,7 @@ export const memberService = {
 
   async rejectInvite(ideaId, userId) {
     if (isSupabaseConfigured) {
-      // Remove pending invite row
+      // Remove pending invite row immediately
       const { error } = await supabase
         .from('idea_members')
         .delete()
@@ -271,31 +309,33 @@ export const memberService = {
 
       if (error) throw error;
 
-      try {
-        const { data: ideaData } = await supabase
-          .from('ideas')
-          .select('title, owner_id')
-          .eq('id', ideaId)
-          .single();
+      // Run notification cleanup and owner notice in background
+      (async () => {
+        try {
+          const [ideaRes, profileRes] = await Promise.allSettled([
+            supabase.from('ideas').select('title, owner_id').eq('id', ideaId).single(),
+            supabase.from('profiles').select('display_name, email').eq('id', userId).single(),
+            supabase
+              .from('notifications')
+              .delete()
+              .match({ user_id: userId, idea_id: ideaId, type: 'invite' })
+          ]);
 
-        const { data: userProfile } = await supabase
-          .from('profiles')
-          .select('display_name, email')
-          .eq('id', userId)
-          .single();
+          const ideaData = ideaRes.status === 'fulfilled' ? ideaRes.value.data : null;
+          const userProfile = profileRes.status === 'fulfilled' ? profileRes.value.data : null;
+          const name = userProfile?.display_name || userProfile?.email || 'A user';
 
-        const name = userProfile?.display_name || userProfile?.email || 'A user';
-
-        if (ideaData?.owner_id) {
-          await supabase.from('notifications').insert({
-            user_id: ideaData.owner_id,
-            idea_id: ideaId,
-            title: 'Invitation Declined',
-            message: `${name} declined the invitation to "${ideaData.title || 'Idea'}".`,
-            type: 'system'
-          });
-        }
-      } catch (_) {}
+          if (ideaData?.owner_id) {
+            await supabase.from('notifications').insert({
+              user_id: ideaData.owner_id,
+              idea_id: ideaId,
+              title: 'Invitation Declined',
+              message: `${name} declined the invitation to "${ideaData.title || 'Idea'}".`,
+              type: 'system'
+            });
+          }
+        } catch (_) {}
+      })();
 
       return true;
     }
@@ -391,10 +431,26 @@ export const memberService = {
         .maybeSingle();
 
       if (existing) {
-        await supabase
+        const { data: updatedRows, error: updErr } = await supabase
           .from('idea_members')
           .update({ role: 'member' })
-          .match({ idea_id: ideaId, user_id: requesterUserId });
+          .match({ idea_id: ideaId, user_id: requesterUserId })
+          .select('id');
+
+        if (updErr || !updatedRows || updatedRows.length === 0) {
+          await supabase
+            .from('idea_members')
+            .delete()
+            .match({ idea_id: ideaId, user_id: requesterUserId });
+
+          await supabase
+            .from('idea_members')
+            .insert({
+              idea_id: ideaId,
+              user_id: requesterUserId,
+              role: 'member'
+            });
+        }
       } else {
         await supabase
           .from('idea_members')

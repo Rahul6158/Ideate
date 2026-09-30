@@ -11,8 +11,21 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let mounted = true;
 
+    // Preload Google Identity Services early so popup opens synchronously on click
+    authService.preloadGoogleScript?.();
+
     async function initAuth() {
       try {
+        // 1. Check if returning from Google OAuth redirect fallback (mobile/webview)
+        const redirectUser = await authService.handleGoogleRedirectCallback?.();
+        if (redirectUser) {
+          if (mounted) {
+            setCurrentUser(redirectUser);
+            setLoading(false);
+          }
+          return;
+        }
+
         if (isSupabaseConfigured && supabase) {
           const { data: { session } } = await supabase.auth.getSession();
           if (session?.user) {
@@ -80,7 +93,9 @@ export function AuthProvider({ children }) {
 
   const signInWithGoogle = async () => {
     const user = await authService.signInWithGoogle();
-    setCurrentUser(user);
+    if (user && !user.redirecting) {
+      setCurrentUser(user);
+    }
     return user;
   };
 

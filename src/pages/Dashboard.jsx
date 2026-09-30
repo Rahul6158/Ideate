@@ -29,20 +29,46 @@ export default function Dashboard({
     return 'Good evening';
   }, []);
 
-  // Pending invitations for current user
-  const pendingInvites = useMemo(() => {
-    return ideas.filter(i => i.is_pending_invite);
-  }, [ideas]);
-
   const [processingInviteId, setProcessingInviteId] = useState(null);
+  const [resolvedInviteIds, setResolvedInviteIds] = useState(() => new Set());
+  const [acceptedInviteIds, setAcceptedInviteIds] = useState(() => new Set());
+
+  // Pending invitations for current user (instantly excludes optimistically resolved invites)
+  const pendingInvites = useMemo(() => {
+    return ideas.filter(i => i.is_pending_invite && !resolvedInviteIds.has(i.id));
+  }, [ideas, resolvedInviteIds]);
 
   const handleAcceptInvite = async (ideaId) => {
-    if (!currentUser?.id) return;
+    if (!currentUser?.id || processingInviteId === ideaId) return;
     setProcessingInviteId(ideaId);
+
+    // Optimistically hide the invite banner immediately and show the idea in the feed
+    setResolvedInviteIds(prev => {
+      const next = new Set(prev);
+      next.add(ideaId);
+      return next;
+    });
+    setAcceptedInviteIds(prev => {
+      const next = new Set(prev);
+      next.add(ideaId);
+      return next;
+    });
+
     try {
       await memberService.acceptInvite(ideaId, currentUser.id);
-      if (onRefreshIdeas) onRefreshIdeas();
+      if (onRefreshIdeas) await onRefreshIdeas();
     } catch (err) {
+      // Rollback optimistic state if failed
+      setResolvedInviteIds(prev => {
+        const next = new Set(prev);
+        next.delete(ideaId);
+        return next;
+      });
+      setAcceptedInviteIds(prev => {
+        const next = new Set(prev);
+        next.delete(ideaId);
+        return next;
+      });
       alert('Failed to accept invitation: ' + err.message);
     } finally {
       setProcessingInviteId(null);
@@ -50,12 +76,26 @@ export default function Dashboard({
   };
 
   const handleRejectInvite = async (ideaId) => {
-    if (!currentUser?.id) return;
+    if (!currentUser?.id || processingInviteId === ideaId) return;
     setProcessingInviteId(ideaId);
+
+    // Optimistically hide the invite banner immediately
+    setResolvedInviteIds(prev => {
+      const next = new Set(prev);
+      next.add(ideaId);
+      return next;
+    });
+
     try {
       await memberService.rejectInvite(ideaId, currentUser.id);
-      if (onRefreshIdeas) onRefreshIdeas();
+      if (onRefreshIdeas) await onRefreshIdeas();
     } catch (err) {
+      // Rollback optimistic state if failed
+      setResolvedInviteIds(prev => {
+        const next = new Set(prev);
+        next.delete(ideaId);
+        return next;
+      });
       alert('Failed to decline invitation: ' + err.message);
     } finally {
       setProcessingInviteId(null);
@@ -65,8 +105,13 @@ export default function Dashboard({
   // Filter ideas
   const filteredIdeas = useMemo(() => {
     return ideas.filter(idea => {
+      const isOptimisticallyAccepted = acceptedInviteIds.has(idea.id);
+      const isOptimisticallyDeclined = resolvedInviteIds.has(idea.id) && !isOptimisticallyAccepted;
+
+      if (isOptimisticallyDeclined) return false;
+
       // Pending invites are shown in the dedicated banner above, not regular card feed
-      if (idea.is_pending_invite) return false;
+      if (idea.is_pending_invite && !isOptimisticallyAccepted) return false;
 
       // Search filter
       if (searchQuery.trim()) {
@@ -78,7 +123,7 @@ export default function Dashboard({
 
       // Tab filter
       const isOwner = idea.owner_id === currentUser?.id;
-      const isMember = idea.is_shared || idea.idea_members?.some(m => 
+      const isMember = isOptimisticallyAccepted || idea.is_shared || idea.idea_members?.some(m => 
         m.user_id === currentUser?.id && m.role !== 'pending_invite' && m.role !== 'pending_join'
       );
 

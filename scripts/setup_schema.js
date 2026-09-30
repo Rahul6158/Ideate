@@ -182,6 +182,12 @@ CREATE POLICY "Authenticated can insert idea members"
   TO authenticated 
   WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Authenticated can update idea members" ON public.idea_members;
+CREATE POLICY "Authenticated can update idea members" 
+  ON public.idea_members FOR UPDATE 
+  TO authenticated 
+  USING (true);
+
 DROP POLICY IF EXISTS "Authenticated can delete idea members" ON public.idea_members;
 CREATE POLICY "Authenticated can delete idea members" 
   ON public.idea_members FOR DELETE 

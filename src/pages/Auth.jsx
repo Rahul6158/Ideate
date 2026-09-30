@@ -222,22 +222,39 @@ export default function Auth({ initialMode = 'signup', onBack }) {
     }
   };
 
+  // Preload Google Identity Services script when Auth screen mounts
+  useEffect(() => {
+    authService.preloadGoogleScript?.();
+  }, []);
+
   const handleSocialAuth = async (provider) => {
     setError('');
+    setSuccess('');
     setSocialLoading(provider);
     try {
+      let res = null;
       if (provider === 'google') {
         if (signInWithGoogle) {
-          await signInWithGoogle();
+          res = await signInWithGoogle();
         } else {
-          await signInWithOAuth('google');
+          res = await signInWithOAuth('google');
         }
       } else {
-        await signInWithOAuth(provider);
+        res = await signInWithOAuth(provider);
+      }
+      if (res?.redirecting) {
+        return;
       }
     } catch (err) {
       console.error('Social auth error:', err);
-      setError(err.message || `Unable to authenticate with ${provider}.`);
+      if (err?.code === 'GOOGLE_PASSWORD_LINK_REQUIRED' && err?.email) {
+        setIsSignUp(false);
+        setPendingVerification(null);
+        setEmail(err.email);
+        setSuccess('Google verified your email! Enter your existing account password once below to link Google Sign-In on this device.');
+      } else {
+        setError(err.message || `Unable to authenticate with ${provider}.`);
+      }
     } finally {
       setSocialLoading('');
     }

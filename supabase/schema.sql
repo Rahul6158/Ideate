@@ -148,6 +148,18 @@ create policy "Idea owners can insert members"
     )
   );
 
+create policy "Idea owners or member self can update membership"
+  on public.idea_members for update
+  to authenticated
+  using (
+    user_id = auth.uid()
+    or exists (
+      select 1 from public.ideas
+      where ideas.id = idea_members.idea_id
+      and ideas.owner_id = auth.uid()
+    )
+  );
+
 create policy "Idea owners or member self can delete membership"
   on public.idea_members for delete
   to authenticated

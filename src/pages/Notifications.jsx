@@ -26,7 +26,7 @@ import { getSoundSettings, setSoundSettings, playNotificationSound } from '../ut
 import { useAuth } from '../context/AuthContext';
 import { usePushNotifications } from '../hooks/usePushNotifications';
 
-export default function Notifications({ onBack, onSelectIdea }) {
+export default function Notifications({ onBack, onSelectIdea, onRefreshIdeas }) {
   const { currentUser } = useAuth();
   const { isSupported: isPushSupported, isSubscribed: isPushSubscribed, permission: pushPermission, subscribe: subscribePush } = usePushNotifications();
   const [notifications, setNotifications] = useState([]);
@@ -83,16 +83,22 @@ export default function Notifications({ onBack, onSelectIdea }) {
     const targetIdeaId = notif.idea_id || notif.ideaId;
     if (!targetIdeaId || !currentUser?.id) return;
     setProcessingId(notif.id);
+    setActionStates(prev => ({ ...prev, [notif.id]: 'accepted' }));
     try {
       await memberService.acceptInvite(targetIdeaId, currentUser.id);
-      setActionStates(prev => ({ ...prev, [notif.id]: 'accepted' }));
       setActionNotice('Invitation accepted! You have been added to the idea space.');
       playNotificationSound('chime', true);
       notificationService.markAsRead(notif.id);
+      if (onRefreshIdeas) onRefreshIdeas();
       if (currentUser?.id) {
         notificationService.fetchNotifications(currentUser.id);
       }
     } catch (err) {
+      setActionStates(prev => {
+        const next = { ...prev };
+        delete next[notif.id];
+        return next;
+      });
       alert('Failed to accept invitation: ' + err.message);
     } finally {
       setProcessingId(null);
@@ -103,15 +109,21 @@ export default function Notifications({ onBack, onSelectIdea }) {
     const targetIdeaId = notif.idea_id || notif.ideaId;
     if (!targetIdeaId || !currentUser?.id) return;
     setProcessingId(notif.id);
+    setActionStates(prev => ({ ...prev, [notif.id]: 'rejected' }));
     try {
       await memberService.rejectInvite(targetIdeaId, currentUser.id);
-      setActionStates(prev => ({ ...prev, [notif.id]: 'rejected' }));
       setActionNotice('Invitation declined.');
       notificationService.markAsRead(notif.id);
+      if (onRefreshIdeas) onRefreshIdeas();
       if (currentUser?.id) {
         notificationService.fetchNotifications(currentUser.id);
       }
     } catch (err) {
+      setActionStates(prev => {
+        const next = { ...prev };
+        delete next[notif.id];
+        return next;
+      });
       alert('Failed to decline invitation: ' + err.message);
     } finally {
       setProcessingId(null);
@@ -134,16 +146,22 @@ export default function Notifications({ onBack, onSelectIdea }) {
     }
 
     setProcessingId(notif.id);
+    setActionStates(prev => ({ ...prev, [notif.id]: 'accepted' }));
     try {
       await memberService.acceptJoinRequest(targetIdeaId, requesterId, notif.id);
-      setActionStates(prev => ({ ...prev, [notif.id]: 'accepted' }));
       setActionNotice('Join request approved! Collaborator added.');
       playNotificationSound('chime', true);
       notificationService.markAsRead(notif.id);
+      if (onRefreshIdeas) onRefreshIdeas();
       if (currentUser?.id) {
         notificationService.fetchNotifications(currentUser.id);
       }
     } catch (err) {
+      setActionStates(prev => {
+        const next = { ...prev };
+        delete next[notif.id];
+        return next;
+      });
       alert('Failed to approve join request: ' + err.message);
     } finally {
       setProcessingId(null);
@@ -161,17 +179,23 @@ export default function Notifications({ onBack, onSelectIdea }) {
     }
 
     setProcessingId(notif.id);
+    setActionStates(prev => ({ ...prev, [notif.id]: 'rejected' }));
     try {
       if (requesterId) {
         await memberService.rejectJoinRequest(targetIdeaId, requesterId, notif.id);
       }
-      setActionStates(prev => ({ ...prev, [notif.id]: 'rejected' }));
       setActionNotice('Join request declined.');
       notificationService.markAsRead(notif.id);
+      if (onRefreshIdeas) onRefreshIdeas();
       if (currentUser?.id) {
         notificationService.fetchNotifications(currentUser.id);
       }
     } catch (err) {
+      setActionStates(prev => {
+        const next = { ...prev };
+        delete next[notif.id];
+        return next;
+      });
       alert('Failed to decline join request: ' + err.message);
     } finally {
       setProcessingId(null);

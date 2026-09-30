@@ -280,6 +280,7 @@ export default function App() {
           ) : isNotificationsOpen ? (
             <Notifications 
               onBack={() => setIsNotificationsOpen(false)} 
+              onRefreshIdeas={loadIdeas}
               onSelectIdea={(idea) => {
                 setIsNotificationsOpen(false);
                 handleSelectIdea(idea);

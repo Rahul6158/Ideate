@@ -57,7 +57,15 @@ export default function Sidebar({
   }, [currentUser?.id]);
 
   const myIdeas = ideas.filter(i => i.owner_id === currentUser?.id);
-  const sharedIdeas = ideas.filter(i => i.owner_id !== currentUser?.id && (i.is_shared || i.idea_members?.some(m => m.user_id === currentUser?.id)));
+  const sharedIdeas = ideas.filter(
+    i =>
+      i.owner_id !== currentUser?.id &&
+      !i.is_pending_invite &&
+      (i.is_shared ||
+        i.idea_members?.some(
+          m => m.user_id === currentUser?.id && m.role !== 'pending_invite' && m.role !== 'pending_join'
+        ))
+  );
 
   const sidebarContent = (
     <div className="flex flex-col h-full justify-between">

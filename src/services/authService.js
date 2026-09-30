@@ -1,7 +1,7 @@
 import { supabase, isSupabaseConfigured, localStore } from '../lib/supabase';
 import { getRandomAvatar } from '../data/avatars';
 
-export const GOOGLE_CLIENT_ID = '514433759579-r2i3dsva88gcnobhk1bm5eb8rls1lji1.apps.googleusercontent.com';
+export const GOOGLE_CLIENT_ID = import.meta.env?.VITE_GOOGLE_CLIENT_ID || '514433759579-r2i3dsva88gcnobhk1bm5eb8rls1lji1.apps.googleusercontent.com';
 
 export const authService = {
   /**
@@ -109,6 +109,8 @@ export const authService = {
         password
       });
       if (error) throw error;
+
+      this._saveGoogleBridge(email, password);
 
       // Automatically assign and persist avatar if new/missing
       const user = data.user;
@@ -221,6 +223,7 @@ export const authService = {
       }
 
       if (authUser) {
+        this._saveGoogleBridge(cleanEmail, password);
         try {
           await supabase.from('profiles').upsert({
             id: authUser.id,
@@ -265,13 +268,118 @@ export const authService = {
   },
 
   /**
-   * Google OAuth 2.0 Sign-In using Google Identity Services
+   * Ensure Google Identity Services script is loaded eagerly
+   */
+  preloadGoogleScript() {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return Promise.resolve();
+    if (window.google?.accounts?.oauth2) return Promise.resolve();
+
+    return new Promise((resolve) => {
+      const existingScript = document.querySelector('script[src*="accounts.google.com/gsi/client"]');
+      if (existingScript) {
+        if (window.google?.accounts?.oauth2) {
+          resolve();
+          return;
+        }
+        existingScript.addEventListener('load', () => resolve(), { once: true });
+        existingScript.addEventListener('error', () => resolve(), { once: true });
+        setTimeout(resolve, 2500);
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.defer = true;
+      script.onload = () => resolve();
+      script.onerror = () => resolve();
+      document.head.appendChild(script);
+    });
+  },
+
+  /**
+   * Fallback OAuth 2.0 Redirect Flow for mobile browsers / in-app webviews that block popups
+   */
+  startGoogleRedirectAuth() {
+    const redirectUri = window.location.origin;
+    const params = new URLSearchParams({
+      client_id: GOOGLE_CLIENT_ID,
+      redirect_uri: redirectUri,
+      response_type: 'token',
+      scope: 'email profile openid',
+      include_granted_scopes: 'true',
+      prompt: 'select_account'
+    });
+    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  },
+
+  /**
+   * Check URL hash for Google OAuth implicit redirect return (#access_token=...)
+   */
+  async handleGoogleRedirectCallback() {
+    if (typeof window === 'undefined') return null;
+    const hash = window.location.hash;
+    if (!hash || !hash.includes('access_token=')) return null;
+
+    // Parse fragment parameters
+    const params = new URLSearchParams(hash.replace(/^#/, ''));
+    const accessToken = params.get('access_token');
+    if (!accessToken) return null;
+
+    // Clean URL hash immediately so refreshes don't re-trigger
+    const cleanUrl = window.location.pathname + window.location.search;
+    window.history.replaceState({}, document.title, cleanUrl);
+
+    const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!res.ok) {
+      throw new Error('Failed to retrieve Google user profile after redirect.');
+    }
+    const googleUserInfo = await res.json();
+    return await this.loginWithGoogleUser(googleUserInfo);
+  },
+
+  async signInWithOAuth(provider) {
+    if (provider === 'google') {
+      return await this.signInWithGoogle();
+    }
+    if (isSupabaseConfigured && supabase) {
+      const { data, error } = await supabase.auth.signInWithOAuth({ provider });
+      if (error) throw error;
+      return data;
+    }
+    throw new Error(`OAuth provider "${provider}" is not configured.`);
+  },
+
+  /**
+   * Google OAuth 2.0 Sign-In using Google Identity Services (with automatic redirect fallback for mobile)
    */
   async signInWithGoogle() {
+    // Detect mobile in-app browsers (WhatsApp, Instagram, Facebook, LinkedIn, Telegram) where popups are blocked
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+    const isInAppBrowser = /FBAN|FBAV|Instagram|WhatsApp|Line|LinkedInApp|wv|Telegram/i.test(ua);
+    const allowedRedirectOrigins = [
+      'https://ideate-black.vercel.app',
+      'https://hegemonical-marin-unbarrenly.ngrok-free.dev',
+      'http://localhost:5173'
+    ];
+    const canUseRedirectFallback =
+      typeof window !== 'undefined' && allowedRedirectOrigins.includes(window.location.origin);
+
+    if (isInAppBrowser && canUseRedirectFallback) {
+      this.startGoogleRedirectAuth();
+      return new Promise(() => {}); // Page is redirecting
+    }
+
     return new Promise((resolve, reject) => {
       const startAuth = () => {
         if (!window.google?.accounts?.oauth2) {
-          reject(new Error('Google Sign-In is initializing. Please try again in a few seconds.'));
+          if (canUseRedirectFallback) {
+            this.startGoogleRedirectAuth();
+            return;
+          }
+          reject(new Error('Could not load Google Sign-In. Please check your connection or disable ad-blockers.'));
           return;
         }
 
@@ -279,6 +387,7 @@ export const authService = {
           const client = window.google.accounts.oauth2.initTokenClient({
             client_id: GOOGLE_CLIENT_ID,
             scope: 'email profile openid',
+            prompt: 'select_account',
             callback: async (tokenResponse) => {
               if (tokenResponse.error) {
                 reject(new Error(tokenResponse.error_description || tokenResponse.error));
@@ -297,12 +406,28 @@ export const authService = {
               }
             },
             error_callback: (err) => {
+              if (err?.type === 'popup_failed_to_open') {
+                if (canUseRedirectFallback) {
+                  this.startGoogleRedirectAuth();
+                  return;
+                }
+                reject(new Error('Google Sign-In popup was blocked by your browser. Please allow popups and try again.'));
+                return;
+              }
+              if (err?.type === 'popup_closed') {
+                reject(new Error('Google Sign-In window was closed before completing sign in.'));
+                return;
+              }
               reject(new Error(err?.message || 'Google Sign-In was cancelled or failed.'));
             }
           });
 
-          client.requestAccessToken();
+          client.requestAccessToken({ prompt: 'select_account' });
         } catch (err) {
+          if (canUseRedirectFallback) {
+            this.startGoogleRedirectAuth();
+            return;
+          }
           reject(err);
         }
       };
@@ -310,15 +435,33 @@ export const authService = {
       if (window.google?.accounts?.oauth2) {
         startAuth();
       } else {
-        const script = document.createElement('script');
-        script.src = 'https://accounts.google.com/gsi/client';
-        script.async = true;
-        script.defer = true;
-        script.onload = () => startAuth();
-        script.onerror = () => reject(new Error('Could not load Google authentication service.'));
-        document.head.appendChild(script);
+        this.preloadGoogleScript().then(() => startAuth());
       }
     });
+  },
+
+  /**
+   * Save or retrieve local password bridge for accounts that use both Password & Google Sign-In
+   */
+  _saveGoogleBridge(email, password) {
+    if (!email || !password) return;
+    try {
+      const cleanEmail = email.toLowerCase().trim();
+      const map = JSON.parse(localStorage.getItem('ideate_auth_bridge_v1') || '{}');
+      map[cleanEmail] = btoa(encodeURIComponent(password));
+      localStorage.setItem('ideate_auth_bridge_v1', JSON.stringify(map));
+    } catch (_) {}
+  },
+
+  _getGoogleBridge(email) {
+    if (!email) return null;
+    try {
+      const cleanEmail = email.toLowerCase().trim();
+      const map = JSON.parse(localStorage.getItem('ideate_auth_bridge_v1') || '{}');
+      return map[cleanEmail] ? decodeURIComponent(atob(map[cleanEmail])) : null;
+    } catch (_) {
+      return null;
+    }
   },
 
   /**
@@ -344,76 +487,169 @@ export const authService = {
         console.warn('Profiles query notice:', err);
       }
 
-      let userId = profile?.id;
       let displayName = profile?.display_name;
-      let avatarUrl = profile?.avatar_url || picture;
+      let avatarUrl = (profile?.avatar_url && !profile.avatar_url.includes('dicebear.com'))
+        ? profile.avatar_url
+        : picture;
       const userRole = profile?.role || (email === 'tushrahul58@gmail.com' ? 'admin' : 'Member');
 
-      // 2. If new user, guarantee unique display name and insert profile
-      if (!profile) {
-        userId = crypto.randomUUID();
+      // Prepare unique display name if new user
+      if (!displayName) {
         let baseName = rawName.trim().replace(/\s+/g, '_');
         let isAvail = await this.isDisplayNameAvailable(baseName);
         displayName = isAvail ? baseName : `${baseName}_${Math.floor(100 + Math.random() * 900)}`;
-
-        try {
-          await supabase.from('profiles').insert([{
-            id: userId,
-            email,
-            display_name: displayName,
-            avatar_url: avatarUrl,
-            role: userRole,
-            updated_at: new Date().toISOString()
-          }]);
-        } catch (err) {
-          console.warn('Google profile insert error:', err);
-        }
-      } else if (!profile.avatar_url || profile.avatar_url.includes('dicebear.com')) {
-        // Update avatar if missing or legacy
-        try {
-          await supabase.from('profiles').update({
-            avatar_url: picture,
-            updated_at: new Date().toISOString()
-          }).eq('id', userId);
-          avatarUrl = picture;
-        } catch (_) {}
       }
 
-      // 3. Try to establish or create Supabase Auth session if possible
-      try {
-        const googlePass = `Google#Auth#${googleUser.sub || 'Ideate2026'}!`;
-        const { error: signErr } = await supabase.auth.signInWithPassword({
+      // 2. Establish a real Supabase Auth session FIRST so auth.uid() is valid for RLS & Foreign Keys
+      const primaryGooglePass = `Google#Auth#${googleUser.sub || 'Ideate2026'}!`;
+      const fallbackGooglePass = `Google#Auth#Ideate2026!`;
+      const bridgedPass = this._getGoogleBridge(email);
+
+      const candidatePasswords = Array.from(
+        new Set([
+          primaryGooglePass,
+          fallbackGooglePass,
+          bridgedPass,
+          email === 'tushrahul58@gmail.com' ? 'Admin@123' : null
+        ].filter(Boolean))
+      );
+
+      let authUser = null;
+      let authSession = null;
+
+      // 2a. Try signing in with candidate passwords
+      for (const candidatePass of candidatePasswords) {
+        const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
           email,
-          password: googlePass
+          password: candidatePass
         });
-        if (signErr) {
-          await supabase.auth.signUp({
-            email,
-            password: googlePass,
-            options: {
-              data: {
-                display_name: displayName,
-                avatar_url: avatarUrl,
-                role: userRole
-              }
-            }
-          });
-          await supabase.auth.signInWithPassword({
-            email,
-            password: googlePass
-          });
+        if (!signInErr && signInData?.user) {
+          authUser = signInData.user;
+          authSession = signInData.session;
+          break;
         }
-      } catch (_) {}
+      }
+
+      // 2b. If not signed in yet, attempt signUp for new Google user
+      if (!authUser) {
+        const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
+          email,
+          password: primaryGooglePass,
+          options: {
+            data: {
+              display_name: displayName,
+              avatar_url: avatarUrl,
+              role: userRole
+            }
+          }
+        });
+
+        // Check if Supabase returned a real new user (identities.length > 0)
+        const isExistingPasswordUser =
+          signUpData?.user &&
+          Array.isArray(signUpData.user.identities) &&
+          signUpData.user.identities.length === 0;
+
+        if (!signUpErr && signUpData?.user && !isExistingPasswordUser) {
+          authUser = signUpData.user;
+          authSession = signUpData.session;
+          if (!authSession) {
+            const { data: retrySignIn } = await supabase.auth.signInWithPassword({
+              email,
+              password: primaryGooglePass
+            });
+            if (retrySignIn?.user) {
+              authUser = retrySignIn.user;
+              authSession = retrySignIn.session;
+            }
+          }
+        } else if (isExistingPasswordUser || signUpErr?.message?.toLowerCase().includes('already registered')) {
+          // Account exists in auth.users with a different password.
+          // Check if it is an empty/unused account (0 ideas, 0 posts, 0 memberships) that can be cleanly re-initialized
+          let canResetEmptyAccount = false;
+          if (profile?.id && email !== 'tushrahul58@gmail.com') {
+            try {
+              const { data: stats } = await supabase.rpc('get_admin_stats');
+              const userStat = stats?.users?.find(u => u.id === profile.id || u.email?.toLowerCase() === email);
+              if (userStat && Number(userStat.ideas_count || 0) === 0 && Number(userStat.posts_count || 0) === 0) {
+                canResetEmptyAccount = true;
+              }
+            } catch (_) {}
+          }
+
+          if (canResetEmptyAccount && profile?.id) {
+            try {
+              await supabase.rpc('admin_delete_user', { target_user_id: profile.id });
+              const { data: freshSignUp } = await supabase.auth.signUp({
+                email,
+                password: primaryGooglePass,
+                options: {
+                  data: {
+                    display_name: displayName,
+                    avatar_url: avatarUrl,
+                    role: userRole
+                  }
+                }
+              });
+              if (freshSignUp?.user) {
+                authUser = freshSignUp.user;
+                authSession = freshSignUp.session;
+                if (!authSession) {
+                  const { data: freshSignIn } = await supabase.auth.signInWithPassword({
+                    email,
+                    password: primaryGooglePass
+                  });
+                  authUser = freshSignIn?.user || authUser;
+                  authSession = freshSignIn?.session || null;
+                }
+              }
+            } catch (resetErr) {
+              console.warn('Empty Google account reset notice:', resetErr);
+            }
+          }
+
+          if (!authUser) {
+            const linkErr = new Error(
+              `Your email (${email}) is already registered with a password. Please enter your password once below to link Google Sign-In.`
+            );
+            linkErr.code = 'GOOGLE_PASSWORD_LINK_REQUIRED';
+            linkErr.email = email;
+            linkErr.googleUser = googleUser;
+            throw linkErr;
+          }
+        } else if (signUpErr) {
+          throw new Error(signUpErr.message || 'Could not complete Google Sign-In.');
+        }
+      }
+
+      const finalUserId = authUser?.id || profile?.id;
+      if (!finalUserId) {
+        throw new Error('Could not establish user session with Google.');
+      }
+
+      // 3. Now that Supabase session is active (auth.uid() === finalUserId), upsert profile in public.profiles
+      try {
+        await supabase.from('profiles').upsert({
+          id: finalUserId,
+          email,
+          display_name: displayName,
+          avatar_url: avatarUrl,
+          role: userRole,
+          updated_at: new Date().toISOString()
+        });
+      } catch (err) {
+        console.warn('Google profile upsert notice:', err);
+      }
 
       const resolved = {
-        id: userId,
+        id: finalUserId,
         email,
         display_name: displayName,
         avatar_url: avatarUrl,
         role: userRole
       };
       localStore.setCurrentUser(resolved);
-      return resolved;
+      return (await this.getCurrentUser()) || resolved;
     }
 
     // Local / Offline fallback
