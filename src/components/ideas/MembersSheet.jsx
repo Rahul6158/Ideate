@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { X, Plus, MoreVertical, Trash2, UserPlus, Copy, Check } from 'lucide-react';
+import { X, Plus, MoreVertical, Trash2, UserPlus, Copy, Check, Sparkles } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { memberService } from '../../services/memberService';
 import { getRandomAvatar } from '../../data/avatars';
+import { IDVY_BOT_USER } from '../../services/aiService';
 
 export default function MembersSheet({ isOpen, onClose, idea, members = [], onOpenAddMember, onMemberRemoved }) {
   const { currentUser } = useAuth();
@@ -51,8 +52,8 @@ export default function MembersSheet({ isOpen, onClose, idea, members = [], onOp
         <div className="flex items-center justify-between pb-4 border-b border-slate-100">
           <div className="flex items-center gap-2">
             <h3 className="text-lg font-bold text-slate-900">Members & Collaborators</h3>
-            <span className="px-2 py-0.5 rounded-full bg-slate-100 text-xs font-semibold text-slate-600">
-              {members.length}
+            <span className="px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 text-xs font-bold border border-purple-200/60">
+              {members.filter(m => !m.is_ai && m.user_id !== IDVY_BOT_USER.id && m.id !== IDVY_BOT_USER.id).length + 1}
             </span>
           </div>
           <button 
@@ -93,7 +94,34 @@ export default function MembersSheet({ isOpen, onClose, idea, members = [], onOp
 
         {/* Members List */}
         <div className="flex-1 overflow-y-auto py-3 space-y-2">
-          {members.map((member) => {
+          {/* Idvy AI Collaborator Permanent Participant */}
+          <div className="flex items-center justify-between p-2.5 rounded-xl bg-purple-50/70 border border-purple-200/80 transition">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-full overflow-hidden ring-2 ring-purple-400 p-0.5 bg-gradient-to-tr from-purple-700 to-indigo-600 flex-shrink-0">
+                <img
+                  src="/avatars/idvy-avatar.avif"
+                  alt="Idvy"
+                  className="w-full h-full rounded-full object-cover"
+                />
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-bold text-purple-950 flex items-center gap-1.5 truncate">
+                  <span>Idvy</span>
+                  <span className="px-1.5 py-0.2 rounded-md bg-purple-200/80 text-purple-800 text-[9px] font-bold uppercase tracking-wider">
+                    AI Friend
+                  </span>
+                </div>
+                <div className="text-xs text-purple-700 font-medium">
+                  Collaborator & Idea Partner · Tag @Idvy
+                </div>
+              </div>
+            </div>
+            <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-bold flex-shrink-0 border border-purple-200/60">
+              Active
+            </span>
+          </div>
+
+          {members.filter(m => !m.is_ai && m.user_id !== IDVY_BOT_USER.id && m.id !== IDVY_BOT_USER.id).map((member) => {
             const isPending = member.role === 'pending_invite';
             return (
               <div 

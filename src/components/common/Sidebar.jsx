@@ -12,7 +12,10 @@ import {
   Sparkles,
   User,
   Shield,
-  KeyRound
+  KeyRound,
+  MoreVertical,
+  Pencil,
+  Trash2
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { getRandomAvatar } from '../../data/avatars';
@@ -32,14 +35,25 @@ export default function Sidebar({
   onOpenAdmin,
   isAdminOpen = false,
   isOpen = false,
-  onClose
+  onClose,
+  onEditIdea,
+  onDeleteIdea
 }) {
   const { currentUser, logout, isSupabaseConfigured } = useAuth();
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [openIdeaMenuId, setOpenIdeaMenuId] = useState(null);
   const [unreadCount, setUnreadCount] = useState(notificationService.getUnreadCount());
   const [unreadCounts, setUnreadCounts] = useState(notificationService.getUnreadCounts());
 
   const isAdmin = currentUser?.role === 'admin' || currentUser?.email === 'tushrahul58@gmail.com';
+
+  // Close idea menu when clicking outside
+  useEffect(() => {
+    if (!openIdeaMenuId) return;
+    const handleDocClick = () => setOpenIdeaMenuId(null);
+    document.addEventListener('click', handleDocClick);
+    return () => document.removeEventListener('click', handleDocClick);
+  }, [openIdeaMenuId]);
 
   useEffect(() => {
     setUnreadCount(notificationService.getUnreadCount());
@@ -56,8 +70,9 @@ export default function Sidebar({
     return unsub;
   }, [currentUser?.id]);
 
-  const myIdeas = ideas.filter(i => i.owner_id === currentUser?.id);
-  const sharedIdeas = ideas.filter(
+  const uniqueIdeas = Array.from(new Map((ideas || []).map(i => [i.id, i])).values());
+  const myIdeas = uniqueIdeas.filter(i => i.owner_id === currentUser?.id);
+  const sharedIdeas = uniqueIdeas.filter(
     i =>
       i.owner_id !== currentUser?.id &&
       !i.is_pending_invite &&
@@ -142,86 +157,16 @@ export default function Sidebar({
               const unread = unreadCounts[idea.id] || 0;
               const isActive = activeIdeaId === idea.id;
 
+              const canManage = idea.owner_id === currentUser?.id || idea.user_id === currentUser?.id || idea.created_by === currentUser?.id || isAdmin;
+
               return (
-                <button
-                  key={idea.id}
-                  onClick={() => {
-                    onSelectIdea(idea);
-                    if (onClose) onClose();
-                  }}
-                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition text-left truncate group relative ${isActive
-                      ? 'text-white font-bold shadow-sm'
-                      : 'text-slate-800 hover:text-slate-950'
-                    }`}
-                  style={{
-                    backgroundColor: isActive ? theme.hex : `${theme.hex}15`,
-                    borderLeft: `3.5px solid ${theme.hex}`
-                  }}
-                >
-                  {/* Cover image or colored initial */}
-                  {idea.cover_url ? (
-                    <div className="relative flex-shrink-0">
-                      <img
-                        src={idea.cover_url}
-                        alt={idea.title}
-                        className="w-6 h-6 rounded-lg object-cover ring-1 ring-black/10 shadow-2xs"
-                      />
-                      <span
-                        className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full ring-1 ring-white"
-                        style={{ backgroundColor: theme.hex }}
-                        title={theme.name || 'Theme palette'}
-                      />
-                    </div>
-                  ) : (
-                    <div
-                      className={`w-6 h-6 rounded-lg flex items-center justify-center font-extrabold text-[10px] flex-shrink-0 shadow-2xs ${isActive ? 'bg-white/20 text-white' : 'text-white'
-                        }`}
-                      style={{ backgroundColor: isActive ? undefined : theme.hex }}
-                    >
-                      {idea.title ? idea.title.charAt(0).toUpperCase() : '💡'}
-                    </div>
-                  )}
-
-                  <span className="truncate flex-1 font-semibold">{idea.title}</span>
-
-                  {/* Unread message counter badge */}
-                  {unread > 0 && (
-                    <span
-                      className={`px-1.5 py-0.5 rounded-full text-[10px] font-black flex-shrink-0 shadow-2xs ${isActive ? 'bg-white text-slate-900' : 'bg-red-500 text-white animate-pulse'
-                        }`}
-                      title={`${unread} unread messages`}
-                    >
-                      {unread}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* SHARED WITH ME Section */}
-        <div className="mb-6">
-          <div className="px-3 text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
-            Shared With Me
-          </div>
-          <div className="space-y-1">
-            {sharedIdeas.length === 0 ? (
-              <div className="px-3 text-xs text-slate-400 italic">No shared ideas yet</div>
-            ) : (
-              sharedIdeas.map(idea => {
-                const theme = getIdeaTheme(idea.color_theme);
-                const unread = unreadCounts[idea.id] || 0;
-                const isActive = activeIdeaId === idea.id;
-
-                return (
+                <div key={idea.id} className="relative group w-full flex items-center">
                   <button
-                    key={idea.id}
                     onClick={() => {
                       onSelectIdea(idea);
                       if (onClose) onClose();
                     }}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition text-left truncate group relative ${isActive
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 pr-9 rounded-xl text-xs sm:text-sm font-medium transition text-left truncate relative ${isActive
                         ? 'text-white font-bold shadow-sm'
                         : 'text-slate-800 hover:text-slate-950'
                       }`}
@@ -250,7 +195,7 @@ export default function Sidebar({
                           }`}
                         style={{ backgroundColor: isActive ? undefined : theme.hex }}
                       >
-                        {idea.title ? idea.title.charAt(0).toUpperCase() : '👥'}
+                        {idea.title ? idea.title.charAt(0).toUpperCase() : '💡'}
                       </div>
                     )}
 
@@ -267,6 +212,201 @@ export default function Sidebar({
                       </span>
                     )}
                   </button>
+
+                  {/* Options Menu Button (Three-dots) - Clean and clearly visible */}
+                  {canManage && (onEditIdea || onDeleteIdea) && (
+                    <div className="absolute right-1.5 flex items-center z-10">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenIdeaMenuId(prev => prev === idea.id ? null : idea.id);
+                        }}
+                        className={`p-1 rounded-lg transition ${
+                          openIdeaMenuId === idea.id 
+                            ? 'opacity-100 bg-black/15' 
+                            : 'opacity-60 hover:opacity-100 group-hover:opacity-100'
+                        } ${
+                          isActive 
+                            ? 'text-white hover:bg-white/25' 
+                            : 'text-slate-500 hover:text-slate-900 hover:bg-black/10'
+                        }`}
+                        title="Idea options (Edit / Delete)"
+                      >
+                        <MoreVertical className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* Dropdown Menu */}
+                      {openIdeaMenuId === idea.id && (
+                        <div
+                          className="absolute right-0 top-full mt-1 w-36 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1 z-50 animate-scale-in text-slate-700"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {onEditIdea && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOpenIdeaMenuId(null);
+                                onEditIdea(idea);
+                              }}
+                              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-slate-50 font-medium text-slate-700 text-left transition"
+                            >
+                              <Pencil className="w-3.5 h-3.5 text-slate-500" />
+                              <span>Edit Idea</span>
+                            </button>
+                          )}
+                          {onDeleteIdea && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOpenIdeaMenuId(null);
+                                onDeleteIdea(idea);
+                              }}
+                              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-red-50 font-medium text-red-600 text-left transition"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                              <span>Delete Idea</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* SHARED WITH ME Section */}
+        <div className="mb-6">
+          <div className="px-3 text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+            Shared With Me
+          </div>
+          <div className="space-y-1">
+            {sharedIdeas.length === 0 ? (
+              <div className="px-3 text-xs text-slate-400 italic">No shared ideas yet</div>
+            ) : (
+              sharedIdeas.map(idea => {
+                const theme = getIdeaTheme(idea.color_theme);
+                const unread = unreadCounts[idea.id] || 0;
+                const isActive = activeIdeaId === idea.id;
+                const canManage = idea.owner_id === currentUser?.id || idea.user_id === currentUser?.id || isAdmin;
+
+                return (
+                  <div key={idea.id} className="relative group w-full flex items-center">
+                    <button
+                      onClick={() => {
+                        onSelectIdea(idea);
+                        if (onClose) onClose();
+                      }}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 pr-9 rounded-xl text-xs sm:text-sm font-medium transition text-left truncate relative ${isActive
+                          ? 'text-white font-bold shadow-sm'
+                          : 'text-slate-800 hover:text-slate-950'
+                        }`}
+                      style={{
+                        backgroundColor: isActive ? theme.hex : `${theme.hex}15`,
+                        borderLeft: `3.5px solid ${theme.hex}`
+                      }}
+                    >
+                      {/* Cover image or colored initial */}
+                      {idea.cover_url ? (
+                        <div className="relative flex-shrink-0">
+                          <img
+                            src={idea.cover_url}
+                            alt={idea.title}
+                            className="w-6 h-6 rounded-lg object-cover ring-1 ring-black/10 shadow-2xs"
+                          />
+                          <span
+                            className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full ring-1 ring-white"
+                            style={{ backgroundColor: theme.hex }}
+                            title={theme.name || 'Theme palette'}
+                          />
+                        </div>
+                      ) : (
+                        <div
+                          className={`w-6 h-6 rounded-lg flex items-center justify-center font-extrabold text-[10px] flex-shrink-0 shadow-2xs ${isActive ? 'bg-white/20 text-white' : 'text-white'
+                            }`}
+                          style={{ backgroundColor: isActive ? undefined : theme.hex }}
+                        >
+                          {idea.title ? idea.title.charAt(0).toUpperCase() : '👥'}
+                        </div>
+                      )}
+
+                      <span className="truncate flex-1 font-semibold">{idea.title}</span>
+
+                      {/* Unread message counter badge */}
+                      {unread > 0 && (
+                        <span
+                          className={`px-1.5 py-0.5 rounded-full text-[10px] font-black flex-shrink-0 shadow-2xs ${isActive ? 'bg-white text-slate-900' : 'bg-red-500 text-white animate-pulse'
+                            }`}
+                          title={`${unread} unread messages`}
+                        >
+                          {unread}
+                        </span>
+                      )}
+                    </button>
+
+                    {/* Options Menu Button (Three-dots) for shared ideas */}
+                    {canManage && (onEditIdea || onDeleteIdea) && (
+                      <div className="absolute right-1.5 flex items-center z-10">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenIdeaMenuId(prev => prev === idea.id ? null : idea.id);
+                          }}
+                          className={`p-1 rounded-lg transition ${
+                            openIdeaMenuId === idea.id 
+                              ? 'opacity-100 bg-black/15' 
+                              : 'opacity-60 hover:opacity-100 group-hover:opacity-100'
+                          } ${
+                            isActive 
+                              ? 'text-white hover:bg-white/25' 
+                              : 'text-slate-500 hover:text-slate-900 hover:bg-black/10'
+                          }`}
+                          title="Idea options (Edit / Delete)"
+                        >
+                          <MoreVertical className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Dropdown Menu */}
+                        {openIdeaMenuId === idea.id && (
+                          <div
+                            className="absolute right-0 top-full mt-1 w-36 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1 z-50 animate-scale-in text-slate-700"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {onEditIdea && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenIdeaMenuId(null);
+                                  onEditIdea(idea);
+                                }}
+                                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-slate-50 font-medium text-slate-700 text-left transition"
+                              >
+                                <Pencil className="w-3.5 h-3.5 text-slate-500" />
+                                <span>Edit Idea</span>
+                              </button>
+                            )}
+                            {onDeleteIdea && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenIdeaMenuId(null);
+                                  onDeleteIdea(idea);
+                                }}
+                                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-red-50 font-medium text-red-600 text-left transition"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                                <span>Delete Idea</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 );
               })
             )}

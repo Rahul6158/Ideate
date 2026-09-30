@@ -12,13 +12,21 @@ import {
   Smile,
   Plus,
   Shield,
-  Info
+  Info,
+  Copy,
+  Check,
+  Zap,
+  Sparkles,
+  EyeOff,
+  Quote
 } from 'lucide-react';
 import AudioPlayer from './AudioPlayer';
+import IdvyMessage from '../ai/IdvyMessage';
 import { useAuth } from '../../context/AuthContext';
 import { getRandomAvatar } from '../../data/avatars';
 import { postService } from '../../services/postService';
 import { PRESET_REACTIONS, EXTENDED_EMOJIS } from '../../data/reactions';
+import { stripMarkdown } from '../../utils/textUtils';
 
 export default function PostItem({ 
   post, 
@@ -26,7 +34,11 @@ export default function PostItem({
   onDelete, 
   onReply, 
   onSelectPerson,
-  onJumpToMessage 
+  onJumpToMessage,
+  isIdeaAuthor = false,
+  onDeleteAllIdvyPosts,
+  onAskIdvyInOTR,
+  canUseOTR = false
 }) {
   const { currentUser } = useAuth();
   const [showMenu, setShowMenu] = useState(false);
@@ -38,6 +50,14 @@ export default function PostItem({
   const [customEmojiInput, setCustomEmojiInput] = useState('');
   const [activeViewerImage, setActiveViewerImage] = useState(null);
   const [activeReactorsModal, setActiveReactorsModal] = useState(null);
+  const [copiedMessage, setCopiedMessage] = useState(false);
+
+  const handleCopyMessage = () => {
+    if (!post.content) return;
+    navigator.clipboard.writeText(post.content);
+    setCopiedMessage(true);
+    setTimeout(() => setCopiedMessage(false), 2000);
+  };
 
   // Sync reactions when prop updates from realtime / refetch
   useEffect(() => {
@@ -140,6 +160,21 @@ export default function PostItem({
     return acc;
   }, {});
 
+  // If this message is from Idvy AI Collaborator
+  if (post.agent_name === 'idvy' || post.sender_type === 'ai') {
+    return (
+      <IdvyMessage
+        post={post}
+        onReply={onReply}
+        onJumpToMessage={onJumpToMessage}
+        onDelete={onDelete}
+        onDeleteAllIdvyPosts={onDeleteAllIdvyPosts}
+        isIdeaAuthor={isIdeaAuthor}
+        onAskIdvyInOTR={onAskIdvyInOTR}
+      />
+    );
+  }
+
   // If this is a system message (e.g. cleared all messages notice)
   if (post.is_system) {
     return (
@@ -158,23 +193,175 @@ export default function PostItem({
     );
   }
 
-  // Parse text for @mentions
-  const renderContent = (text) => {
-    if (!text) return null;
-    const parts = text.split(/(@[\w\s.-]+(?:\s|$))/g);
+  // Inline formatting for bold, italics, code, links, and @mentions
+  const renderInlineMarkdown = (line) => {
+    if (!line) return null;
+    const parts = line.split(/(\*\*.*?\*\*|`.*?`|\[.*?\]\(.*?\)|@[a-zA-Z0-9_.-]+|\*[^*]+\*|_[^_]+_)/g);
     return parts.map((part, i) => {
+      if (!part) return null;
+      if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
+        return <strong key={i} className="font-bold text-slate-900">{part.slice(2, -2)}</strong>;
+      }
+      if ((part.startsWith('*') && part.endsWith('*') && part.length > 2) ||
+          (part.startsWith('_') && part.endsWith('_') && part.length > 2)) {
+        return <em key={i} className="italic text-slate-700">{part.slice(1, -1)}</em>;
+      }
+      if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
+        return <code key={i} className="px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-800 font-mono text-xs border border-slate-200">{part.slice(1, -1)}</code>;
+      }
       if (part.startsWith('@')) {
         return (
           <span 
             key={i} 
-            className="inline-block px-1.5 py-0.2 rounded-md bg-blue-100 text-blue-700 font-bold text-xs mr-1 shadow-2xs"
+            className="inline-block px-1.5 py-0.2 rounded-md bg-blue-100 text-blue-700 font-bold text-xs mr-0.5 shadow-2xs"
           >
             {part.trim()}
           </span>
         );
       }
-      return part;
+      if (part.startsWith('[') && part.includes('](')) {
+        const match = part.match(/\[(.*?)\]\((.*?)\)/);
+        if (match) {
+          return (
+            <a 
+              key={i} 
+              href={match[2]} 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="text-blue-600 hover:text-blue-800 underline inline-flex items-center gap-0.5 font-medium"
+            >
+              {match[1]}
+              <ExternalLink className="w-2.5 h-2.5 inline" />
+            </a>
+          );
+        }
+      }
+      return part.replace(/\*\*/g, '');
     });
+  };
+
+  // Structured multi-line markdown formatter for posts
+  const renderContent = (text) => {
+    if (!text) return null;
+    const lines = text.split('\n');
+
+    const hasBlockTokens = lines.some(l => 
+      l.trim().startsWith('```') || 
+      l.trim().startsWith('### ') || 
+      l.trim().startsWith('## ') || 
+      l.trim().startsWith('# ') || 
+      l.trim().startsWith('>') || 
+      l.trim().startsWith('- ') || 
+      l.trim().startsWith('* ') || 
+      /^\d+\.\s+/.test(l.trim())
+    );
+
+    if (!hasBlockTokens && lines.length <= 1) {
+      return renderInlineMarkdown(text);
+    }
+
+    const elements = [];
+    let inCodeBlock = false;
+    let codeLines = [];
+
+    lines.forEach((line, idx) => {
+      if (line.trim().startsWith('```')) {
+        if (inCodeBlock) {
+          elements.push(
+            <div key={`code-${idx}`} className="my-2 p-2.5 rounded-xl bg-slate-900 text-slate-100 font-mono text-xs overflow-x-auto border border-slate-800">
+              <pre>{codeLines.join('\n')}</pre>
+            </div>
+          );
+          codeLines = [];
+          inCodeBlock = false;
+        } else {
+          inCodeBlock = true;
+        }
+        return;
+      }
+
+      if (inCodeBlock) {
+        codeLines.push(line);
+        return;
+      }
+
+      // Blockquotes
+      if (line.trim().startsWith('>')) {
+        const quoteText = line.trim().replace(/^>\s*/, '');
+        elements.push(
+          <div key={idx} className="my-1.5 pl-3 py-1 border-l-3 border-blue-400 bg-blue-50/50 rounded-r-xl text-xs sm:text-sm text-blue-950 italic flex items-start gap-1.5">
+            <Quote className="w-3.5 h-3.5 text-blue-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">{renderInlineMarkdown(quoteText)}</div>
+          </div>
+        );
+        return;
+      }
+
+      // Headings
+      if (line.startsWith('### ')) {
+        elements.push(
+          <h4 key={idx} className="text-xs sm:text-sm font-bold text-slate-900 mt-2 mb-1">
+            {renderInlineMarkdown(line.replace('### ', ''))}
+          </h4>
+        );
+        return;
+      }
+      if (line.startsWith('## ') || line.startsWith('# ')) {
+        elements.push(
+          <h3 key={idx} className="text-sm sm:text-base font-bold text-slate-900 mt-2.5 mb-1">
+            {renderInlineMarkdown(line.replace(/^#+\s*/, ''))}
+          </h3>
+        );
+        return;
+      }
+
+      // Bullet points
+      if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
+        const bulletText = line.trim().replace(/^[-*]\s+/, '');
+        elements.push(
+          <div key={idx} className="flex items-start gap-2 my-0.5 pl-1 text-xs sm:text-sm text-slate-800 leading-relaxed">
+            <span className="text-blue-500 font-bold select-none">•</span>
+            <span className="flex-1">{renderInlineMarkdown(bulletText)}</span>
+          </div>
+        );
+        return;
+      }
+
+      // Numbered items
+      const numMatch = line.trim().match(/^(\d+)\.\s+(.*)/);
+      if (numMatch) {
+        elements.push(
+          <div key={idx} className="flex items-start gap-2 my-0.5 pl-1 text-xs sm:text-sm text-slate-800 leading-relaxed">
+            <span className="font-bold text-blue-600 min-w-4 text-right text-xs mt-0.5">{numMatch[1]}.</span>
+            <span className="flex-1">{renderInlineMarkdown(numMatch[2])}</span>
+          </div>
+        );
+        return;
+      }
+
+      // Empty line spacer
+      if (!line.trim()) {
+        elements.push(<div key={idx} className="h-1.5" />);
+        return;
+      }
+
+      // Regular line
+      elements.push(
+        <div key={idx} className="text-xs sm:text-sm text-slate-800 leading-relaxed">
+          {renderInlineMarkdown(line)}
+        </div>
+      );
+    });
+
+    if (inCodeBlock && codeLines.length > 0) {
+      elements.push(
+        <div key="code-end" className="my-2 p-2.5 rounded-xl bg-slate-900 text-slate-100 font-mono text-xs overflow-x-auto border border-slate-800">
+          <pre>{codeLines.join('\n')}</pre>
+        </div>
+      );
+    }
+
+    return elements;
   };
 
   return (
@@ -221,7 +408,7 @@ export default function PostItem({
                 Replying to {post.reply_to.user_name || 'Member'}:
               </span>
               <span className="text-slate-500 truncate italic">
-                "{post.reply_to.content || 'Attached file'}"
+                "{stripMarkdown(post.reply_to.content || 'Attached file')}"
               </span>
             </div>
           )}
@@ -233,12 +420,42 @@ export default function PostItem({
             </div>
           ))}
 
-          {/* Text content with @mentions highlighting */}
-          {post.content && (
-            <p className="text-xs sm:text-sm text-slate-800 leading-relaxed break-words whitespace-pre-wrap">
-              {renderContent(post.content)}
-            </p>
-          )}
+          {/* Text content with @mentions highlighting or Slash Command Card */}
+          {post.content && (() => {
+            const isSlashCommand = post.content.trim().startsWith('/');
+            if (isSlashCommand) {
+              const match = post.content.trim().match(/^(\/[a-zA-Z0-9._]+)(?:\s+([\s\S]*))?$/);
+              const commandWord = match ? match[1] : post.content.trim().split(/\s+/)[0];
+              const commandPrompt = match ? (match[2] || '') : post.content.trim().slice(commandWord.length).trim();
+
+              return (
+                <div className="my-1.5 p-3 rounded-2xl bg-gradient-to-r from-purple-50/90 via-indigo-50/80 to-purple-50/90 border border-purple-200/90 shadow-2xs max-w-xl">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="p-1 rounded-lg bg-purple-600 text-white shadow-2xs">
+                      <Zap className="w-3 h-3 fill-current" />
+                    </div>
+                    <span className="font-mono text-xs font-black tracking-tight text-purple-900 bg-purple-200/70 px-2 py-0.5 rounded-lg border border-purple-300/60 shadow-2xs">
+                      {commandWord}
+                    </span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-purple-600/80">
+                      Slash Command
+                    </span>
+                  </div>
+                  {commandPrompt && (
+                    <div className="text-xs sm:text-sm text-slate-800 leading-relaxed break-words font-medium pl-1 mt-1.5 space-y-1">
+                      {renderContent(commandPrompt)}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            return (
+              <div className="text-xs sm:text-sm text-slate-800 leading-relaxed break-words space-y-1">
+                {renderContent(post.content)}
+              </div>
+            );
+          })()}
 
           {/* Compact Grid View for Images */}
           {imageAttachments.length > 0 && (
@@ -478,6 +695,28 @@ export default function PostItem({
             {/* Subtle Divider */}
             <div className="h-3 w-px bg-slate-200/90 mx-0.5 self-center"></div>
 
+            {/* Copy Button */}
+            {post.content && (
+              <button
+                type="button"
+                onClick={handleCopyMessage}
+                className="px-2 py-0.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 text-xs font-semibold flex items-center gap-1 transition shadow-2xs"
+                title="Copy message text"
+              >
+                {copiedMessage ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="text-emerald-600 text-[11px] font-bold">Copied</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Copy</span>
+                  </>
+                )}
+              </button>
+            )}
+
             {/* Quick Reply Button */}
             {onReply && (
               <button
@@ -488,6 +727,19 @@ export default function PostItem({
               >
                 <CornerUpLeft className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Reply</span>
+              </button>
+            )}
+
+            {/* Ask Idvy in OTR Button - Visible only if member has Off-chat access */}
+            {onAskIdvyInOTR && canUseOTR && post.content && (
+              <button
+                type="button"
+                onClick={() => onAskIdvyInOTR(post)}
+                className="px-2 py-0.5 rounded-lg text-slate-400 hover:text-purple-700 hover:bg-purple-50 text-xs font-semibold flex items-center gap-1 transition shadow-2xs"
+                title="Discuss this message with Idvy in Off-the-Record"
+              >
+                <EyeOff className="w-3.5 h-3.5 text-purple-600" />
+                <span className="hidden md:inline">Ask in OTR</span>
               </button>
             )}
 
@@ -504,9 +756,22 @@ export default function PostItem({
 
               {showMenu && (
                 <div 
-                  className="absolute left-0 bottom-full mb-1.5 w-36 bg-white rounded-xl shadow-xl border border-slate-200/90 p-1 z-30 animate-fade-in"
+                  className="absolute left-0 bottom-full mb-1.5 w-40 bg-white rounded-xl shadow-xl border border-slate-200/90 p-1 z-30 animate-fade-in"
                   onMouseLeave={() => setShowMenu(false)}
                 >
+                  {post.content && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMenu(false);
+                        handleCopyMessage();
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 rounded-lg transition"
+                    >
+                      <Copy className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Copy text</span>
+                    </button>
+                  )}
                   {onReply && (
                     <button
                       type="button"
@@ -518,6 +783,19 @@ export default function PostItem({
                     >
                       <CornerUpLeft className="w-3.5 h-3.5 text-blue-500" />
                       <span>Reply</span>
+                    </button>
+                  )}
+                  {onAskIdvyInOTR && canUseOTR && post.content && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMenu(false);
+                        onAskIdvyInOTR(post);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-purple-700 hover:bg-purple-50 rounded-lg transition"
+                    >
+                      <EyeOff className="w-3.5 h-3.5 text-purple-600" />
+                      <span>Ask Idvy in OTR</span>
                     </button>
                   )}
                   {isAuthor ? (

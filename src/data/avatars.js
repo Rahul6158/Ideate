@@ -35,6 +35,9 @@ export function getRandomAvatar(seed = '') {
   if (seed.toLowerCase().includes('admin') || seed.toLowerCase().includes('tushrahul58@gmail.com')) {
     return '/avatars/norm-man-1.jpg';
   }
+  if (seed.toLowerCase().includes('idvy')) {
+    return '/avatars/idvy-avatar.avif';
+  }
 
   // Deterministic avatar index based on user seed (email or name)
   let hash = 0;

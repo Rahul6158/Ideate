@@ -42,7 +42,8 @@ export default function App() {
   const loadIdeas = async () => {
     try {
       const data = await ideaService.getIdeas('all', currentUser?.id);
-      setIdeas(data);
+      const unique = Array.from(new Map((data || []).map(i => [i.id, i])).values());
+      setIdeas(unique);
     } catch (err) {
       console.error('Failed to load ideas', err);
     }
@@ -145,7 +146,10 @@ export default function App() {
   };
 
   const handleIdeaCreated = (newIdea) => {
-    setIdeas(prev => [newIdea, ...prev]);
+    setIdeas(prev => {
+      const filtered = prev.filter(i => i.id !== newIdea.id);
+      return [newIdea, ...filtered];
+    });
     setActiveIdea(newIdea);
     setIsNotificationsOpen(false);
     setIsProfileOpen(false);
@@ -232,6 +236,8 @@ export default function App() {
         isAdminOpen={isAdminOpen}
         isOpen={isMobileDrawerOpen}
         onClose={() => setIsMobileDrawerOpen(false)}
+        onEditIdea={handleOpenEditIdea}
+        onDeleteIdea={handleOpenDeleteIdea}
       />
 
       {/* Main Content Area */}

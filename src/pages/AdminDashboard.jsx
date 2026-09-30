@@ -22,19 +22,36 @@ import {
   X,
   Filter,
   Eye,
-  Lock
+  Lock,
+  Pause,
+  Play,
+  Sparkles
 } from 'lucide-react';
 import { adminService } from '../services/adminService';
+import { aiService } from '../services/aiService';
+import { useAuth } from '../context/AuthContext';
 import { getRandomAvatar } from '../data/avatars';
 import { getIdeaTheme } from '../data/themePalettes';
 import LoadingScreen from '../components/common/LoadingScreen';
 
 export default function AdminDashboard({ onBack, onSelectIdea }) {
+  const { currentUser } = useAuth();
   const [activeTab, setActiveTab] = useState('users'); // 'users' | 'storage' | 'tables' | 'ideas'
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // AI Governance states
+  const [globalPaused, setGlobalPaused] = useState(() => aiService.isGlobalPaused());
+  const [bannedAiUsers, setBannedAiUsers] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('ideate_ai_banned_users') || '[]');
+    } catch (_) {
+      return [];
+    }
+  });
+  const [pauseRefreshKey, setPauseRefreshKey] = useState(0);
 
   // Delete User Modal state
   const [userToDelete, setUserToDelete] = useState(null);
@@ -52,6 +69,45 @@ export default function AdminDashboard({ onBack, onSelectIdea }) {
 
   // Status message banner
   const [statusMessage, setStatusMessage] = useState(null);
+
+  const handleToggleGlobalPause = async () => {
+    const nextVal = !globalPaused;
+    await aiService.setGlobalPause(nextVal, currentUser);
+    setGlobalPaused(nextVal);
+    showNotification(nextVal ? 'Idvy paused globally platform-wide ⏸️' : 'Idvy resumed globally ▶️', nextVal ? 'warning' : 'success');
+  };
+
+  const handleToggleUserAIAccess = async (userId, userDisplayName) => {
+    const isCurrentlyBanned = bannedAiUsers.includes(userId);
+    const nextAccess = isCurrentlyBanned;
+    await aiService.setUserAIAccess(userId, nextAccess);
+    const updated = nextAccess ? bannedAiUsers.filter(id => id !== userId) : [...bannedAiUsers, userId];
+    setBannedAiUsers(updated);
+    showNotification(nextAccess ? `AI access restored for ${userDisplayName} ✨` : `AI access restricted for ${userDisplayName} ⛔`, nextAccess ? 'success' : 'warning');
+  };
+
+  const handleToggleIdeaPauseByAdmin = (ideaId, ideaTitle) => {
+    const current = aiService.getIdeaPauseState(ideaId);
+    const nextPaused = !current.is_paused;
+    aiService.setIdeaPaused(ideaId, nextPaused, true);
+    setPauseRefreshKey(prev => prev + 1);
+    showNotification(nextPaused ? `Idvy paused with Admin Lock for "${ideaTitle}" ⏸️` : `Idvy resumed for "${ideaTitle}" ▶️`);
+  };
+
+  const handleAdminDeleteIdea = async (ideaId, ideaTitle) => {
+    if (!window.confirm(`Are you sure you want to permanently delete idea "${ideaTitle}"? This will delete all its messages and attachments.`)) return;
+    try {
+      await adminService.deleteTableRow('ideas', ideaId);
+      setStats(prev => prev ? ({
+        ...prev,
+        ideas_count: Math.max(0, prev.ideas_count - 1),
+        ideas: (prev.ideas || []).filter(i => i.id !== ideaId)
+      }) : prev);
+      showNotification(`Idea "${ideaTitle}" permanently deleted 🗑️`);
+    } catch (err) {
+      alert('Failed to delete idea: ' + err.message);
+    }
+  };
 
   const loadStats = async (isManual = false) => {
     if (isManual) setRefreshing(true);
@@ -294,6 +350,56 @@ export default function AdminDashboard({ onBack, onSelectIdea }) {
 
       {/* Main Content Area */}
       <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-6 space-y-6">
+        {/* Global Idvy Platform-Wide Governance Card */}
+        <div className="bg-gradient-to-r from-purple-900 via-indigo-900 to-slate-900 rounded-3xl p-5 sm:p-6 text-white shadow-md border border-purple-800/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center text-purple-200 border border-white/10 shadow-xs flex-shrink-0">
+              <Sparkles className="w-6 h-6 text-purple-300" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="font-extrabold text-base tracking-tight">
+                  Global Idvy AI Collaborator
+                </h3>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                  globalPaused 
+                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' 
+                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                }`}>
+                  {globalPaused ? 'Paused Platform-Wide' : 'Active Everywhere'}
+                </span>
+              </div>
+              <p className="text-xs text-purple-200/80 mt-0.5">
+                {globalPaused 
+                  ? 'Idvy is currently paused across all idea spaces. Users cannot invoke Idvy until you resume it.' 
+                  : 'Idvy is actively collaborating across all ideas. You can pause all responses instantly if needed.'}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleToggleGlobalPause}
+            className={`px-4 py-2.5 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm active:scale-95 flex-shrink-0 ${
+              globalPaused
+                ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold shadow-emerald-500/20'
+                : 'bg-rose-500 hover:bg-rose-400 text-white font-extrabold shadow-rose-500/20'
+            }`}
+          >
+            {globalPaused ? (
+              <>
+                <Play className="w-4 h-4 fill-current" />
+                <span>Resume Idvy Globally</span>
+              </>
+            ) : (
+              <>
+                <Pause className="w-4 h-4 fill-current" />
+                <span>Pause Idvy Globally</span>
+              </>
+            )}
+          </button>
+        </div>
+
         {loading ? (
           <LoadingScreen message="Gathering system data & storage metrics..." fullScreen={false} size="default" />
         ) : (
@@ -357,6 +463,7 @@ export default function AdminDashboard({ onBack, onSelectIdea }) {
                         <tr>
                           <th className="px-5 py-3">User</th>
                           <th className="px-4 py-3">Role</th>
+                          <th className="px-4 py-3">AI Access</th>
                           <th className="px-4 py-3">Ideas Created</th>
                           <th className="px-4 py-3">Posts Created</th>
                           <th className="px-4 py-3">Joined Date</th>
@@ -366,7 +473,7 @@ export default function AdminDashboard({ onBack, onSelectIdea }) {
                       <tbody className="divide-y divide-slate-100 font-medium">
                         {filteredUsers.length === 0 ? (
                           <tr>
-                            <td colSpan="6" className="px-5 py-10 text-center text-slate-400 italic">
+                            <td colSpan="7" className="px-5 py-10 text-center text-slate-400 italic">
                               No users found matching "{searchQuery}"
                             </td>
                           </tr>
@@ -424,6 +531,37 @@ export default function AdminDashboard({ onBack, onSelectIdea }) {
                                       <Users className="w-3 h-3 text-slate-500" />
                                       <span>Member</span>
                                     </span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3.5">
+                                  {isAdminRole ? (
+                                    <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-purple-100 text-purple-800 border border-purple-200/80 inline-flex items-center gap-1 shadow-2xs">
+                                      <Sparkles className="w-3 h-3 text-purple-600" />
+                                      <span>Full AI</span>
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleUserAIAccess(user.id, user.display_name || user.email)}
+                                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition flex items-center gap-1.5 shadow-2xs active:scale-95 ${
+                                        bannedAiUsers.includes(user.id)
+                                          ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
+                                          : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
+                                      }`}
+                                      title={bannedAiUsers.includes(user.id) ? "Click to restore user's AI access" : "Click to stop user's AI access"}
+                                    >
+                                      {bannedAiUsers.includes(user.id) ? (
+                                        <>
+                                          <AlertTriangle className="w-3 h-3 text-rose-600" />
+                                          <span>Restricted</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                          <span>Active</span>
+                                        </>
+                                      )}
+                                    </button>
                                   )}
                                 </td>
                                 <td className="px-4 py-3.5 text-slate-700 font-semibold">
@@ -957,28 +1095,72 @@ export default function AdminDashboard({ onBack, onSelectIdea }) {
                                 </span>
                               </div>
 
-                              {/* Stats and Action button */}
-                              <div className="mt-3 pt-2.5 border-t border-slate-200/60 flex items-center justify-between text-xs">
-                                <div className="flex items-center gap-3 text-slate-500 font-medium">
-                                  <span className="flex items-center gap-1">
-                                    <Users className="w-3.5 h-3.5 text-slate-400" />
-                                    <span>{idea.members_count || 1}</span>
-                                  </span>
-                                  <span className="flex items-center gap-1">
-                                    <MessageSquare className="w-3.5 h-3.5 text-slate-400" />
-                                    <span>{idea.posts_count || 0}</span>
-                                  </span>
+                              {/* Stats and Admin Action buttons */}
+                              <div className="mt-3 pt-2.5 border-t border-slate-200/60 flex flex-col gap-2">
+                                <div className="flex items-center justify-between text-xs">
+                                  <div className="flex items-center gap-3 text-slate-500 font-medium">
+                                    <span className="flex items-center gap-1" title="Members">
+                                      <Users className="w-3.5 h-3.5 text-slate-400" />
+                                      <span>{idea.members_count || 1}</span>
+                                    </span>
+                                    <span className="flex items-center gap-1" title="Posts & Messages">
+                                      <MessageSquare className="w-3.5 h-3.5 text-slate-400" />
+                                      <span>{idea.posts_count || 0}</span>
+                                    </span>
+                                  </div>
+
+                                  {/* Admin Pause Lock Toggle */}
+                                  {(() => {
+                                    const pauseInfo = aiService.getIdeaPauseState(idea.id);
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleToggleIdeaPauseByAdmin(idea.id, idea.title)}
+                                        className={`px-2 py-1 rounded-lg text-[11px] font-semibold border transition flex items-center gap-1 shadow-2xs ${
+                                          pauseInfo.is_paused 
+                                            ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200' 
+                                            : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                                        }`}
+                                        title={pauseInfo.is_paused ? "Idvy paused with Admin Lock (click to resume)" : "Pause Idvy for this space with Admin Lock"}
+                                      >
+                                        {pauseInfo.is_paused ? (
+                                          <>
+                                            <Play className="w-3 h-3 text-amber-700 fill-amber-700" />
+                                            <span>Locked ⏸️</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Pause className="w-3 h-3 text-slate-500" />
+                                            <span>Pause AI</span>
+                                          </>
+                                        )}
+                                      </button>
+                                    );
+                                  })()}
                                 </div>
 
-                                {onSelectIdea && (
+                                <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
                                   <button
-                                    onClick={() => onSelectIdea(idea)}
-                                    className="px-3 py-1 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold text-xs transition flex items-center gap-1.5 shadow-2xs"
+                                    type="button"
+                                    onClick={() => handleAdminDeleteIdea(idea.id, idea.title)}
+                                    className="px-2 py-1 rounded-lg text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200/70 text-xs font-semibold transition flex items-center gap-1"
+                                    title="Permanently delete idea"
                                   >
-                                    <span>Open Space</span>
-                                    <ExternalLink className="w-3 h-3" />
+                                    <Trash2 className="w-3 h-3" />
+                                    <span>Delete</span>
                                   </button>
-                                )}
+
+                                  {onSelectIdea && (
+                                    <button
+                                      onClick={() => onSelectIdea(idea)}
+                                      className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs transition flex items-center gap-1.5 shadow-2xs"
+                                      title="Open idea discussion to view and participate in all chats"
+                                    >
+                                      <span>View All Chats</span>
+                                      <ExternalLink className="w-3 h-3" />
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           </div>

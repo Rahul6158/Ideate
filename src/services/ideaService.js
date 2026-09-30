@@ -133,7 +133,36 @@ export const ideaService = {
           })
           .select()
           .single();
-        if (!error && data) return data;
+
+        if (!error && data) {
+          // Phase 2: Automatically add Idvy welcome message & default AI access to every new idea
+          try {
+            // 1. Initialize owner AI access
+            await supabase.from('idea_ai_access').insert({
+              idea_id: data.id,
+              user_id: currentUser.id,
+              can_use_ai: true,
+              is_ai_enabled: true
+            });
+
+            // 2. Post Idvy's personalized friendly welcome greeting into the discussion
+            const creatorName = currentUser?.display_name || currentUser?.email?.split('@')[0] || 'friend';
+            const welcomeGreeting = `Hey @${creatorName}! 👋 I'm **Idvy**, your collaborative partner and idea friend! 🎉\n\nEven if it's just the two of us right now, don't worry—we've got this. I'm ready to dive into **"${title}"** with you!\n\nWhenever you want to bounce thoughts around, here are some things we can do together:\n- 💡 Brainstorm & sharpen the vision: type \`/coreidea\` or \`/improve\`\n- 🎯 Pressure-test ideas & spot blind spots: type \`/validate\`\n- 📋 Keep everything neat & organized: type \`/summarize\`, \`/decisions\`, or \`/actionitems\`\n- 🌐 Search trends & live web insights: type \`/websearch\` or \`/research\`\n\nOr just tag me anytime: **@Idvy**. Let's build something incredible together! ✨`;
+
+            await supabase.from('posts').insert({
+              idea_id: data.id,
+              user_id: currentUser.id,
+              content: welcomeGreeting,
+              sender_type: 'ai',
+              agent_name: 'idvy',
+              is_system: false
+            });
+          } catch (aiInitErr) {
+            console.warn('Idvy auto-welcome setup notice:', aiInitErr.message);
+          }
+
+          return data;
+        }
       } catch (err) {
         console.warn('Supabase createIdea notice:', err.message);
       }
@@ -147,8 +176,8 @@ export const ideaService = {
       owner_id: currentUser.id,
       cover_url: chosenCover,
       color_theme: chosenColor,
-      members_count: 1,
-      posts_count: 0,
+      members_count: 2, // Owner + Idvy
+      posts_count: 1, // Welcome post
       updated_at: 'Just now',
       updated_timestamp: Date.now(),
       created_at: new Date().toISOString(),
@@ -169,7 +198,29 @@ export const ideaService = {
       avatar_url: currentUser.avatar_url
     };
     localStore.setMembers(newIdea.id, [initialMember]);
-    localStore.setPosts(newIdea.id, []);
+
+    // Set initial Idvy welcome post in localStore
+    const welcomePost = {
+      id: 'post-idvy-welcome-' + Date.now(),
+      idea_id: newIdea.id,
+      user_id: '00000000-0000-0000-0000-000000001d71',
+      sender_type: 'ai',
+      agent_name: 'idvy',
+      user: {
+        id: '00000000-0000-0000-0000-000000001d71',
+        display_name: 'Idvy',
+        email: 'idvy@ideate.app',
+        avatar_url: '/avatars/idvy-avatar.avif'
+      },
+      content: `Hey @${currentUser?.display_name || 'friend'}! 👋 I'm **Idvy**, your collaborative partner and idea friend! 🎉\n\nEven if it's just the two of us right now, don't worry—we've got this. I'm ready to dive into **"${title}"** with you!\n\nWhenever you want to bounce thoughts around, here are some things we can do together:\n- 💡 Brainstorm & sharpen the vision: type \`/coreidea\` or \`/improve\`\n- 🎯 Pressure-test ideas & spot blind spots: type \`/validate\`\n- 📋 Keep everything neat & organized: type \`/summarize\`, \`/decisions\`, or \`/actionitems\`\n- 🌐 Search trends & live web insights: type \`/websearch\` or \`/research\`\n\nOr just tag me anytime: **@Idvy**. Let's build something incredible together! ✨`,
+      reply_to: null,
+      is_system: false,
+      created_at: 'Just now',
+      timestamp: Date.now(),
+      reactions: [],
+      attachments: []
+    };
+    localStore.setPosts(newIdea.id, [welcomePost]);
 
     return newIdea;
   },

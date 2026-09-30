@@ -1,10 +1,48 @@
 import { supabase, isSupabaseConfigured, localStore } from '../lib/supabase';
 import { notificationService } from './notificationService';
 
+// Metadata prefix & suffix for resilient schema-agnostic storage
+const META_PREFIX = '<!--ideate-meta:';
+const META_SUFFIX = '-->';
+
+function encodePostContent(rawContent, { sender_type, agent_name, ai_metadata, reply_to, is_system }) {
+  const meta = {};
+  if (sender_type && sender_type !== 'user') meta.sender_type = sender_type;
+  if (agent_name) meta.agent_name = agent_name;
+  if (ai_metadata) meta.ai_metadata = ai_metadata;
+  if (reply_to) meta.reply_to = reply_to;
+  if (is_system) meta.is_system = is_system;
+
+  if (Object.keys(meta).length === 0) return rawContent || '';
+  return `${META_PREFIX}${JSON.stringify(meta)}${META_SUFFIX}\n${rawContent || ''}`;
+}
+
+function decodePostContent(storedContent) {
+  if (!storedContent || typeof storedContent !== 'string') {
+    return { content: storedContent || '', meta: {} };
+  }
+  if (storedContent.startsWith(META_PREFIX)) {
+    const endIdx = storedContent.indexOf(META_SUFFIX);
+    if (endIdx !== -1) {
+      try {
+        const jsonStr = storedContent.slice(META_PREFIX.length, endIdx);
+        const meta = JSON.parse(jsonStr);
+        const cleanContent = storedContent.slice(endIdx + META_SUFFIX.length).replace(/^\n/, '');
+        return { content: cleanContent, meta };
+      } catch (e) {
+        // ignore parse error
+      }
+    }
+  }
+  return { content: storedContent, meta: {} };
+}
+
 export const postService = {
   async getPosts(ideaId) {
     if (isSupabaseConfigured) {
       try {
+        // Query base posts with joined profiles, attachments, reactions
+        // Only select columns guaranteed to exist in Supabase schema
         const { data, error } = await supabase
           .from('posts')
           .select(`
@@ -12,8 +50,6 @@ export const postService = {
             idea_id,
             user_id,
             content,
-            reply_to,
-            is_system,
             created_at,
             user:profiles!posts_user_id_fkey(id, email, display_name, avatar_url),
             attachments:post_attachments(*),
@@ -23,12 +59,67 @@ export const postService = {
           .order('created_at', { ascending: true });
 
         if (!error && data) {
-          return data.map(p => ({
-            ...p,
-            timestamp: new Date(p.created_at).getTime(),
-            created_at: formatTimestamp(p.created_at),
-            reactions: p.reactions || []
-          }));
+          const mapped = data.map(p => {
+            const { content: cleanContent, meta } = decodePostContent(p.content);
+            const sender_type = p.sender_type || meta.sender_type || 'user';
+            const agent_name = p.agent_name || meta.agent_name || null;
+            const ai_metadata = p.ai_metadata || meta.ai_metadata || null;
+            const reply_to = p.reply_to || meta.reply_to || null;
+            const is_system = p.is_system || meta.is_system || false;
+
+            const isIdvy = agent_name === 'idvy' || sender_type === 'ai';
+            return {
+              ...p,
+              content: cleanContent,
+              sender_type,
+              agent_name,
+              ai_metadata,
+              reply_to,
+              is_system,
+              user: isIdvy ? {
+                id: '00000000-0000-0000-0000-000000001d71',
+                display_name: 'Idvy',
+                email: 'idvy@ideate.app',
+                avatar_url: '/avatars/idvy-avatar.avif'
+              } : p.user,
+              timestamp: new Date(p.created_at).getTime(),
+              created_at: formatTimestamp(p.created_at),
+              reactions: p.reactions || []
+            };
+          });
+
+          // Extract any AI permissions sync posts to update local permissions cache
+          const permPosts = mapped.filter(p => 
+            p.agent_name === 'ai_permissions' || 
+            p.ai_metadata?.type === 'ai_permissions_update' || 
+            (typeof p.content === 'string' && p.content.startsWith('[AI_PERMISSIONS_SYNC]'))
+          );
+          if (permPosts.length > 0) {
+            import('./aiService').then(({ aiService }) => {
+              permPosts.forEach(pp => {
+                const fullMap = pp.ai_metadata?.full_map;
+                if (fullMap) {
+                  aiService.syncPermissionsCache(ideaId, fullMap);
+                }
+              });
+            }).catch(() => {});
+          }
+
+          // Filter out internal sync posts so they never display in visible chat
+          const visiblePosts = mapped.filter(p => 
+            p.agent_name !== 'ai_permissions' && 
+            p.ai_metadata?.type !== 'ai_permissions_update' && 
+            !(typeof p.content === 'string' && p.content.startsWith('[AI_PERMISSIONS_SYNC]'))
+          );
+
+          // Sync to localStore cache
+          try {
+            localStore.savePosts(visiblePosts);
+          } catch (_) {}
+
+          return visiblePosts;
+        } else if (error) {
+          console.warn('Supabase getPosts notice:', error.message);
         }
       } catch (err) {
         console.warn('Supabase getPosts error:', err.message);
@@ -38,23 +129,58 @@ export const postService = {
     return localStore.getPosts(ideaId);
   },
 
-  async createPost(ideaId, { content, attachments = [], reply_to = null }, currentUser) {
+  async createPost(ideaId, { content, attachments = [], reply_to = null, sender_type = 'user', agent_name = null, ai_metadata = null }, currentUser) {
     const formattedTime = formatTimestamp(new Date());
 
     if (isSupabaseConfigured) {
       try {
-        // Insert post
-        const { data: post, error: postError } = await supabase
-          .from('posts')
-          .insert({
+        // Resolve valid user_id for Supabase foreign key + RLS
+        // If currentUser is the IDVY_BOT_USER, use the active authenticated session user ID
+        let effectiveUserId = currentUser?.id;
+        if (!effectiveUserId || effectiveUserId === '00000000-0000-0000-0000-000000001d71') {
+          const authUser = (await supabase.auth.getUser())?.data?.user;
+          effectiveUserId = authUser?.id || ideaId;
+        }
+
+        // Encode metadata directly into content so it NEVER fails regardless of DB columns!
+        const encodedContent = encodePostContent(content, {
+          sender_type,
+          agent_name,
+          ai_metadata,
+          reply_to,
+          is_system: false
+        });
+
+        let post = null;
+        let postError = null;
+
+        // Try insert with native extended columns first (in case migration was run)
+        const fullPayload = {
+          idea_id: ideaId,
+          user_id: effectiveUserId,
+          content: encodedContent,
+          reply_to: reply_to || null,
+          is_system: false,
+          sender_type: sender_type || 'user',
+          agent_name: agent_name || null,
+          ai_metadata: ai_metadata || null
+        };
+
+        const res = await supabase.from('posts').insert(fullPayload).select().single();
+        if (res.error && (res.error.code === '42703' || res.error.message?.includes('column'))) {
+          // Extended columns don't exist in DB — fallback to base columns with encoded content!
+          const basePayload = {
             idea_id: ideaId,
-            user_id: currentUser.id,
-            content: content || null,
-            reply_to: reply_to || null,
-            is_system: false
-          })
-          .select()
-          .single();
+            user_id: effectiveUserId,
+            content: encodedContent
+          };
+          const baseRes = await supabase.from('posts').insert(basePayload).select().single();
+          post = baseRes.data;
+          postError = baseRes.error;
+        } else {
+          post = res.data;
+          postError = res.error;
+        }
 
         if (postError) {
           console.warn('Supabase posts table insert error, falling back to localStore:', postError.message);
@@ -95,24 +221,49 @@ export const postService = {
           }
 
           // Asynchronously dispatch notifications and push alerts
-          notificationService.notifyPostCreated({
-            post,
-            ideaId,
-            authorUser: currentUser
-          }).catch(() => {});
+          if (sender_type !== 'ai') {
+            notificationService.notifyPostCreated({
+              post,
+              ideaId,
+              authorUser: currentUser
+            }).catch(() => {});
+          }
 
-          return {
+          const authorUser = agent_name === 'idvy' || sender_type === 'ai'
+            ? {
+                id: '00000000-0000-0000-0000-000000001d71',
+                display_name: 'Idvy',
+                email: 'idvy@ideate.app',
+                avatar_url: '/avatars/idvy-avatar.avif'
+              }
+            : {
+                id: currentUser.id,
+                display_name: currentUser.display_name,
+                email: currentUser.email,
+                avatar_url: currentUser.avatar_url
+              };
+
+          const fullCreatedPost = {
             ...post,
+            content, // Return clean un-encoded content to UI
+            sender_type,
+            agent_name,
+            ai_metadata,
+            reply_to,
+            is_system: false,
             created_at: formattedTime,
-            user: {
-              id: currentUser.id,
-              display_name: currentUser.display_name,
-              email: currentUser.email,
-              avatar_url: currentUser.avatar_url
-            },
+            user: authorUser,
             attachments: createdAttachments,
             reactions: []
           };
+
+          // Also cache locally
+          try {
+            const cached = localStore.getPosts(ideaId);
+            localStore.savePosts([...cached, fullCreatedPost]);
+          } catch (_) {}
+
+          return fullCreatedPost;
         }
       } catch (err) {
         console.warn('Supabase createPost error (falling back to local storage):', err.message);
@@ -121,16 +272,28 @@ export const postService = {
 
     // Offline cache / Local store fallback
     const posts = localStore.getPosts(ideaId);
+    const authorUser = agent_name === 'idvy'
+      ? {
+          id: '00000000-0000-0000-0000-000000001d71',
+          display_name: 'Idvy',
+          email: 'idvy@ideate.app',
+          avatar_url: '/avatars/idvy-avatar.avif'
+        }
+      : {
+          id: currentUser.id,
+          display_name: currentUser.display_name,
+          email: currentUser.email,
+          avatar_url: currentUser.avatar_url
+        };
+
     const newPost = {
       id: 'post-' + Date.now(),
       idea_id: ideaId,
-      user_id: currentUser.id,
-      user: {
-        id: currentUser.id,
-        display_name: currentUser.display_name,
-        email: currentUser.email,
-        avatar_url: currentUser.avatar_url
-      },
+      user_id: authorUser.id,
+      sender_type,
+      agent_name,
+      ai_metadata,
+      user: authorUser,
       content: content || '',
       reply_to: reply_to || null,
       is_system: false,
@@ -162,6 +325,30 @@ export const postService = {
 
     let posts = localStore.getPosts(ideaId);
     posts = posts.filter(p => p.id !== postId);
+    localStore.setPosts(ideaId, posts);
+    return true;
+  },
+
+  /**
+   * Delete all Idvy messages from an idea
+   */
+  async deleteIdvyPosts(ideaId) {
+    if (isSupabaseConfigured) {
+      try {
+        const { error } = await supabase
+          .from('posts')
+          .delete()
+          .eq('idea_id', ideaId)
+          .or('agent_name.eq.idvy,sender_type.eq.ai,user_id.eq.00000000-0000-0000-0000-000000001d71');
+        if (!error) return true;
+        console.warn('Supabase deleteIdvyPosts error:', error.message);
+      } catch (err) {
+        console.warn('Supabase deleteIdvyPosts error:', err.message);
+      }
+    }
+
+    let posts = localStore.getPosts(ideaId);
+    posts = posts.filter(p => p.agent_name !== 'idvy' && p.sender_type !== 'ai' && p.user_id !== '00000000-0000-0000-0000-000000001d71');
     localStore.setPosts(ideaId, posts);
     return true;
   },
@@ -268,7 +455,7 @@ export const postService = {
         table: 'posts',
         filter: `idea_id=eq.${ideaId}`
       }, async (payload) => {
-        // Fetch full post with user profile
+        // Fetch full post with user profile using base columns
         const { data } = await supabase
           .from('posts')
           .select(`
@@ -276,8 +463,6 @@ export const postService = {
             idea_id,
             user_id,
             content,
-            reply_to,
-            is_system,
             created_at,
             user:profiles!posts_user_id_fkey(id, email, display_name, avatar_url),
             attachments:post_attachments(*),
@@ -287,8 +472,53 @@ export const postService = {
           .single();
 
         if (data) {
+          const { content: cleanContent, meta } = decodePostContent(data.content);
+          const sender_type = data.sender_type || meta.sender_type || 'user';
+          const agent_name = data.agent_name || meta.agent_name || null;
+          const ai_metadata = data.ai_metadata || meta.ai_metadata || null;
+          const reply_to = data.reply_to || meta.reply_to || null;
+          const is_system = data.is_system || meta.is_system || false;
+
+          const isIdvy = agent_name === 'idvy' || sender_type === 'ai';
+
+          // Check if this is an internal permissions sync message
+          if (
+            agent_name === 'ai_permissions' || 
+            ai_metadata?.type === 'ai_permissions_update' || 
+            (typeof cleanContent === 'string' && cleanContent.startsWith('[AI_PERMISSIONS_SYNC]'))
+          ) {
+            import('./aiService').then(({ aiService }) => {
+              if (ai_metadata?.full_map) {
+                aiService.syncPermissionsCache(ideaId, ai_metadata.full_map);
+              }
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('ideate:ai_permissions_updated', {
+                  detail: {
+                    ideaId,
+                    userId: ai_metadata?.user_id,
+                    permissions: ai_metadata?.permissions,
+                    full_map: ai_metadata?.full_map
+                  }
+                }));
+              }
+            }).catch(() => {});
+            return; // Do NOT push to chat timeline!
+          }
+
           onNewPost({
             ...data,
+            content: cleanContent,
+            sender_type,
+            agent_name,
+            ai_metadata,
+            reply_to,
+            is_system,
+            user: isIdvy ? {
+              id: '00000000-0000-0000-0000-000000001d71',
+              display_name: 'Idvy',
+              email: 'idvy@ideate.app',
+              avatar_url: '/avatars/idvy-avatar.avif'
+            } : data.user,
             timestamp: new Date(data.created_at).getTime(),
             created_at: formatTimestamp(data.created_at),
             reactions: data.reactions || []

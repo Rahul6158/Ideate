@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   ArrowLeft, 
   Users, 
@@ -13,7 +13,12 @@ import {
   Copy,
   Check,
   Bell,
-  BellOff
+  BellOff,
+  Sparkles,
+  Lock,
+  EyeOff,
+  Pause,
+  Play
 } from 'lucide-react';
 import PostItem from '../components/posts/PostItem';
 import PostComposer from '../components/posts/PostComposer';
@@ -22,6 +27,13 @@ import ClearMessagesModal from '../components/posts/ClearMessagesModal';
 import UserMessagesSidebar from '../components/posts/UserMessagesSidebar';
 import AddMemberModal from '../components/ideas/AddMemberModal';
 import MembersSheet from '../components/ideas/MembersSheet';
+import IdvyTypingIndicator from '../components/ai/IdvyTypingIndicator';
+import AIAccessManagerModal from '../components/ai/AIAccessManagerModal';
+import IdvyPrivateSidebar from '../components/ai/IdvyPrivateSidebar';
+import IdeaInfoModal from '../components/ideas/IdeaInfoModal';
+import NoticeModal from '../components/common/NoticeModal';
+import ErrorBoundary from '../components/common/ErrorBoundary';
+import { aiService, IDVY_BOT_USER } from '../services/aiService';
 import { postService } from '../services/postService';
 import { memberService } from '../services/memberService';
 import { useAuth } from '../context/AuthContext';
@@ -77,6 +89,185 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
   const [isClearMessagesOpen, setIsClearMessagesOpen] = useState(false);
   const [isClearingMessages, setIsClearingMessages] = useState(false);
   
+  // Role & Author determination
+  const isOwner = idea?.owner_id === currentUser?.id || idea?.user_id === currentUser?.id || idea?.created_by === currentUser?.id;
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.email === 'tushrahul58@gmail.com';
+  const canManage = isOwner || isAdmin;
+  const isIdeaAuthor = isOwner;
+
+  // Private chat thread state
+  const [isPrivateSidebarOpen, setIsPrivateSidebarOpen] = useState(false);
+  const [privateSidebarPrompt, setPrivateSidebarPrompt] = useState('');
+  const [isIdeaInfoOpen, setIsIdeaInfoOpen] = useState(false);
+
+  // In-App Notice Modal Configuration (replaces browser alerts)
+  const [noticeModalConfig, setNoticeModalConfig] = useState({
+    isOpen: false,
+    badge: 'info',
+    title: '',
+    message: ''
+  });
+
+  // Composer prefill content (from Off-the-Record "Send to Input Box")
+  const [composerPrefill, setComposerPrefill] = useState('');
+  
+  // Paused Idvy state (persisted per idea with admin lock support)
+  const initialPause = aiService.getIdeaPauseState(idea?.id);
+  const [isIdvyPaused, setIsIdvyPaused] = useState(initialPause.is_paused);
+  const [isPausedByAdmin, setIsPausedByAdmin] = useState(initialPause.paused_by_admin);
+
+  // Current user's AI access permission in this idea space (granular: OTR & Tagging)
+  const [hasAIAccess, setHasAIAccess] = useState(true);
+  const [canUseOTR, setCanUseOTR] = useState(true);
+  const [canTagAI, setCanTagAI] = useState(true);
+  const [aiAccessDetails, setAiAccessDetails] = useState(null);
+
+  const verifyAccess = useCallback(async () => {
+    if (!idea?.id || !currentUser?.id) return;
+    const access = await aiService.checkAIAccess(idea.id, currentUser.id, isOwner, isAdmin, members);
+    setHasAIAccess(access.can_use_ai);
+    setCanUseOTR(access.can_use_otr === true || isOwner || isAdmin);
+    setCanTagAI(access.can_tag_ai === true || isOwner || isAdmin);
+    setAiAccessDetails(access);
+
+    // If OTR was revoked while the private sidebar was open, close it
+    if (!access.can_use_otr && !isOwner && !isAdmin) {
+      setIsPrivateSidebarOpen(false);
+    }
+  }, [idea?.id, currentUser?.id, isOwner, isAdmin, members]);
+
+  useEffect(() => {
+    verifyAccess();
+  }, [verifyAccess]);
+
+  // Realtime permission sync listener (syncs across devices and accounts without page refresh)
+  useEffect(() => {
+    if (!idea?.id) return;
+    const handlePermUpdate = async (e) => {
+      if (e.detail?.ideaId === idea.id) {
+        await verifyAccess();
+      }
+    };
+    window.addEventListener('ideate:ai_permissions_updated', handlePermUpdate);
+    return () => window.removeEventListener('ideate:ai_permissions_updated', handlePermUpdate);
+  }, [idea?.id, verifyAccess]);
+
+  // Handler to discuss any message with Idvy in Off-the-Record
+  const handleAskIdvyInOTR = (post) => {
+    if (!canUseOTR && !isOwner && !isAdmin) {
+      setNoticeModalConfig({
+        isOpen: true,
+        badge: 'lock',
+        title: 'Off-Chat Access Reserved',
+        message: `Off-the-Record private AI chat is reserved for the idea owner by default.\n\nThe idea owner (@${idea.owner_name || 'Owner'}) can grant you Off-chat access from Idea Settings -> AI Permissions.`
+      });
+      return;
+    }
+
+    const sender = post.user_name || post.user?.display_name || (post.sender_type === 'ai' ? 'Idvy' : 'Member');
+    const prompt = `Let's discuss this message from @${sender} off-the-record:\n\n"${post.content}"\n\nWhat are your thoughts and suggestions on this?`;
+    
+    setPrivateSidebarPrompt(prompt);
+    setIsPrivateSidebarOpen(true);
+  };
+
+  // Handler to post directly to chat as Idvy (native Idvy styling, zero disclaimers)
+  const handleSendAsIdvyToChat = async (aiContent) => {
+    if (!aiContent || !idea?.id) return;
+    try {
+      await postService.createPost(idea.id, {
+        content: aiContent,
+        sender_type: 'ai',
+        user_name: 'Idvy',
+        agent_name: 'idvy',
+        is_pinned: false,
+        ai_metadata: {
+          model: 'nemotron-70b',
+          posted_from: 'off-the-record'
+        }
+      }, IDVY_BOT_USER);
+
+      const refreshed = await postService.getPosts(idea.id);
+      setPosts(refreshed);
+      setTimeout(() => {
+        timelineEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    } catch (err) {
+      console.error('Failed to post as Idvy:', err);
+      setNoticeModalConfig({
+        isOpen: true,
+        badge: 'warning',
+        title: 'Post Failed',
+        message: err.message || 'Could not post Idvy response to idea chat. Please try again.'
+      });
+    }
+  };
+
+  // Handler to have Idvy answer the same question directly in the main team discussion
+  const handleAnswerInMainChat = async ({ question, answer }) => {
+    if (!idea?.id) return;
+    try {
+      if (question && question.trim()) {
+        const questionPrompt = question.trim().startsWith('@Idvy') ? question.trim() : `@Idvy ${question.trim()}`;
+        await handlePostCreated({ content: questionPrompt });
+      } else if (answer) {
+        await handleSendAsIdvyToChat(answer);
+      }
+    } catch (err) {
+      console.warn('Failed to trigger answer in main chat:', err);
+    }
+  };
+
+  const handleTogglePauseIdvy = (explicitState) => {
+    const currentPause = aiService.getIdeaPauseState(idea?.id);
+    const nextPaused = typeof explicitState === 'boolean' ? explicitState : !currentPause.is_paused;
+
+    if (currentPause.paused_by_admin && !isAdmin && !nextPaused) {
+      setNoticeModalConfig({
+        isOpen: true,
+        badge: 'warning',
+        title: 'Action Restricted',
+        message: 'Idvy was paused by a platform administrator. Only an administrator can resume Idvy in this idea space.'
+      });
+      return;
+    }
+
+    try {
+      const updated = aiService.setIdeaPaused(idea.id, nextPaused, isAdmin);
+      setIsIdvyPaused(updated.is_paused);
+      setIsPausedByAdmin(updated.paused_by_admin);
+
+      notificationService.addNotification({
+        title: updated.is_paused ? 'Idvy Paused ⏸️' : 'Idvy Resumed ▶️',
+        message: updated.is_paused 
+          ? (isAdmin ? 'Idvy paused by Admin. Regular users cannot resume.' : 'Idvy is now paused in this idea space.') 
+          : 'Idvy is now active and ready to collaborate!',
+        type: 'system',
+        ideaId: idea?.id,
+        playSound: false
+      });
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleDeleteAllIdvyPosts = async () => {
+    try {
+      await postService.deleteIdvyPosts(idea.id);
+      setPosts(prev => prev.filter(p => p.agent_name !== 'idvy' && p.sender_type !== 'ai' && p.user_id !== IDVY_BOT_USER.id));
+      if (onUpdateIdeaStats) onUpdateIdeaStats(idea.id);
+      notificationService.addNotification({
+        title: 'Idvy Messages Cleared 🧹',
+        message: 'All Idvy responses have been removed from this idea.',
+        type: 'system',
+        ideaId: idea.id,
+        playSound: false
+      });
+    } catch (err) {
+      alert('Failed to delete Idvy messages: ' + err.message);
+    }
+  };
+
   const timelineEndRef = useRef(null);
 
   // Load posts and members for this idea
@@ -99,6 +290,22 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
           );
           setPosts(uniquePosts);
           setMembers(membersData || []);
+
+          // If brand new idea with no posts, immediately greet the creator
+          if (uniquePosts.length === 0 && currentUser?.id) {
+            const creatorName = currentUser?.display_name || currentUser?.email?.split('@')[0] || 'friend';
+            const welcomeGreeting = `Hey @${creatorName}! 👋 I'm **Idvy**, your collaborative partner and idea friend! 🎉\n\nEven if it's just the two of us right now, don't worry—we've got this. I'm ready to dive into **"${idea.title || 'this idea'}"** with you!\n\nWhenever you want to bounce thoughts around, here are some things we can do together:\n- 💡 Brainstorm & sharpen the vision: type \`/coreidea\` or \`/improve\`\n- 🎯 Pressure-test ideas & spot blind spots: type \`/validate\`\n- 📋 Keep everything neat & organized: type \`/summarize\`, \`/decisions\`, or \`/actionitems\`\n- 🌐 Search trends & live web insights: type \`/websearch\` or \`/research\`\n\nOr just tag me anytime: **@Idvy**. Let's build something incredible together! ✨`;
+
+            postService.createPost(idea.id, {
+              content: welcomeGreeting,
+              sender_type: 'ai',
+              agent_name: 'idvy'
+            }, currentUser).then(createdPost => {
+              if (isSubscribed && createdPost) {
+                setPosts([createdPost]);
+              }
+            }).catch(e => console.warn('Auto-welcome post creation error:', e));
+          }
 
           // Automatically mark idea as read for current user
           if (currentUser?.id) {
@@ -185,25 +392,289 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
     };
   }, [idea?.id]);
 
-  // Handle post created with deduplication
+  const [isAIAccessOpen, setIsAIAccessOpen] = useState(false);
+  const [isIdvyThinking, setIsIdvyThinking] = useState(false);
+  const [idvyStatus, setIdvyStatus] = useState('Idvy is reviewing the discussion...');
+
+  // Handle post created with deduplication & Idvy AI invocation
   const handlePostCreated = async (postData) => {
     try {
+      const userMessageContent = postData.content || '';
+
+      // Intercept private chat / private summarize commands
+      if (userMessageContent.trim().startsWith('/offtherecord') || userMessageContent.trim().startsWith('/private')) {
+        const query = userMessageContent.trim().replace(/^\/(?:offtherecord|private)\s*/i, '').trim();
+        setPrivateSidebarPrompt(query || '');
+        setIsPrivateSidebarOpen(true);
+        return;
+      }
+
+      if (userMessageContent.trim().startsWith('/summarize-private')) {
+        setPrivateSidebarPrompt('Please summarize all member messages and key proposals privately.');
+        setIsPrivateSidebarOpen(true);
+        return;
+      }
+
+      // Intercept /pause and /resume slash commands
+      const trimmed = userMessageContent.trim();
+      const callerName = currentUser?.display_name || currentUser?.email?.split('@')[0] || 'Friend';
+      if (trimmed === '/pause' || trimmed.startsWith('/pause-idvy')) {
+        handleTogglePauseIdvy(true);
+        await postService.createPost(idea.id, {
+          content: `⏸️ @${callerName} paused **Idvy** in this idea. Automatic responses and mentions are now paused. Type \`/resume\` or click Resume to activate her again.`,
+          sender_type: 'system'
+        });
+        const refreshedPosts = await postService.getPosts(idea.id);
+        setPosts(refreshedPosts);
+        return;
+      }
+
+      if (trimmed === '/resume' || trimmed.startsWith('/resume-idvy') || trimmed === '/unpause') {
+        handleTogglePauseIdvy(false);
+        await postService.createPost(idea.id, {
+          content: `▶️ **Idvy** has been resumed by @${callerName}! Ready to collaborate. Mention @Idvy anytime! ✨`,
+          sender_type: 'system'
+        });
+        const refreshedPosts = await postService.getPosts(idea.id);
+        setPosts(refreshedPosts);
+        return;
+      }
+
+      // Intercept /give.ai.accto and /revoke.ai.accto slash commands
+      if (trimmed.startsWith('/give.ai.accto') || trimmed.startsWith('/revoke.ai.accto')) {
+        const isRevoke = trimmed.startsWith('/revoke.ai.accto');
+        if (!isOwner && !isAdmin) {
+          setNoticeModalConfig({
+            isOpen: true,
+            badge: 'lock',
+            title: 'Permission Denied',
+            message: `Only the idea owner (@${idea.owner_name || 'Owner'}) or an administrator can manage AI permissions.`
+          });
+          return;
+        }
+
+        const argsStr = trimmed.replace(isRevoke ? /^\/revoke\.ai\.accto\s*/ : /^\/give\.ai\.accto\s*/, '').trim();
+        const parts = argsStr.split(/\s+/).filter(Boolean);
+        const targetRaw = parts[0] || '';
+        const scope = (parts[1] || 'both').toLowerCase();
+
+        const cleanTarget = targetRaw.replace(/^@/, '').toLowerCase();
+        const targetMember = (members || []).find(m => {
+          const dName = (m.display_name || '').toLowerCase().replace(/\s+/g, '_');
+          const dOrig = (m.display_name || '').toLowerCase();
+          const emailPrefix = (m.email || '').split('@')[0].toLowerCase();
+          return cleanTarget && (dName === cleanTarget || dOrig === cleanTarget || emailPrefix === cleanTarget || m.id === cleanTarget || m.user_id === cleanTarget);
+        });
+
+        if (!targetMember) {
+          await postService.createPost(idea.id, {
+            content: `⚠️ Could not find collaborator **${targetRaw || 'member'}**. Please specify a valid member username or tag, e.g.:\n\`/give.ai.accto @member otr\` or \`/revoke.ai.accto @member tag\``,
+            sender_type: 'system'
+          });
+          const refreshedPosts = await postService.getPosts(idea.id);
+          setPosts(refreshedPosts);
+          return;
+        }
+
+        const targetUid = targetMember.user_id || targetMember.id;
+        const currentPerms = aiService.getMemberGranularAccess(idea.id, targetUid);
+        let nextPerms = { ...currentPerms };
+
+        if (!isRevoke) {
+          if (scope === 'otr' || scope === 'offchat' || scope === 'private') {
+            nextPerms.can_use_otr = true;
+          } else if (scope === 'tag' || scope === 'tagging' || scope === 'mention') {
+            nextPerms.can_tag_ai = true;
+          } else {
+            nextPerms.can_use_otr = true;
+            nextPerms.can_tag_ai = true;
+          }
+        } else {
+          if (scope === 'otr' || scope === 'offchat' || scope === 'private') {
+            nextPerms.can_use_otr = false;
+          } else if (scope === 'tag' || scope === 'tagging' || scope === 'mention') {
+            nextPerms.can_tag_ai = false;
+          } else {
+            nextPerms.can_use_otr = false;
+            nextPerms.can_tag_ai = false;
+          }
+        }
+
+        await aiService.setMemberGranularAccess(idea.id, targetUid, nextPerms, null, currentUser);
+        const targetLabel = targetMember.display_name || targetMember.email?.split('@')[0] || 'member';
+
+        let actionDescription = '';
+        if (!isRevoke) {
+          if (scope === 'otr') actionDescription = 'granted **Off-Chat (OTR)** access to';
+          else if (scope === 'tag') actionDescription = 'granted **Tagging (@Idvy)** access to';
+          else actionDescription = 'granted full Idvy access (**Off-Chat + Tagging**) to';
+        } else {
+          if (scope === 'otr') actionDescription = 'revoked **Off-Chat (OTR)** access from';
+          else if (scope === 'tag') actionDescription = 'revoked **Tagging (@Idvy)** access from';
+          else actionDescription = 'revoked all Idvy access from';
+        }
+
+        await postService.createPost(idea.id, {
+          content: `🔑 @${callerName} ${actionDescription} @${targetLabel}.`,
+          sender_type: 'system'
+        });
+        const refreshedPosts = await postService.getPosts(idea.id);
+        setPosts(refreshedPosts);
+        return;
+      }
+
       const newPost = await postService.createPost(idea.id, postData, currentUser);
+      
+      let updatedPostsList = [];
       setPosts(prev => {
         const existingIdx = prev.findIndex(p => p.id === newPost.id);
         if (existingIdx !== -1) {
           const updated = [...prev];
           updated[existingIdx] = newPost;
+          updatedPostsList = updated;
           return updated;
         }
-        return [...prev, newPost];
+        updatedPostsList = [...prev, newPost];
+        return updatedPostsList;
       });
       if (onUpdateIdeaStats) onUpdateIdeaStats(idea.id);
 
-      // Smooth scroll down to new post
+      // Smooth scroll down to user's new post
       setTimeout(() => {
         timelineEndRef.current?.scrollIntoView({ behavior: 'smooth' });
       }, 100);
+
+      // Check if this post should trigger Idvy AI
+      if (aiService.shouldTriggerIdvy(userMessageContent)) {
+        const callerName = currentUser?.display_name || currentUser?.email?.split('@')[0] || 'friend';
+
+        // 1. Check Global Pause
+        if (aiService.isGlobalPaused()) {
+          (async () => {
+            await postService.createPost(idea.id, {
+              content: `⏸️ **Idvy Notice**: Hey @${callerName}! Idvy is currently paused globally by platform administrators.`,
+              sender_type: 'ai',
+              agent_name: 'idvy'
+            }, IDVY_BOT_USER);
+            const refreshed = await postService.getPosts(idea.id);
+            setPosts(refreshed);
+          })();
+          return;
+        }
+
+        // 2. Check Admin User Ban
+        if (aiService.isUserAIBanned(currentUser?.id)) {
+          (async () => {
+            await postService.createPost(idea.id, {
+              content: `🚫 **AI Access Restricted**: Hey @${callerName}, your AI access has been restricted by an administrator.`,
+              sender_type: 'ai',
+              agent_name: 'idvy'
+            }, IDVY_BOT_USER);
+            const refreshed = await postService.getPosts(idea.id);
+            setPosts(refreshed);
+          })();
+          return;
+        }
+
+        // 3. Check Idea-level Pause
+        if (isIdvyPaused) {
+          (async () => {
+            await postService.createPost(idea.id, {
+              content: `⏸️ **Idvy Notice**: Hey @${callerName}! Idvy is currently paused in this idea space. ${isPausedByAdmin ? 'It was paused by a platform administrator.' : 'The idea owner can resume Idvy from Idea Settings.'}`,
+              sender_type: 'ai',
+              agent_name: 'idvy'
+            }, IDVY_BOT_USER);
+            const refreshed = await postService.getPosts(idea.id);
+            setPosts(refreshed);
+          })();
+          return;
+        }
+
+        // 4. Check Member AI Permission for Tagging in main discussion
+        if (!canTagAI && !isOwner && !isAdmin) {
+          setNoticeModalConfig({
+            isOpen: true,
+            badge: 'lock',
+            title: 'Tagging Access Reserved',
+            message: `Hey @${callerName}! Mentioning @Idvy in the main discussion requires Tagging access.\n\nThe idea owner (@${idea.owner_name || 'Owner'}) can grant you Tagging (@Idvy) access from Idea Settings -> AI Permissions.`
+          });
+          return;
+        }
+
+        setIsIdvyThinking(true);
+        const parsed = aiService.parseInput(userMessageContent);
+
+        if (parsed.command === 'websearch' || parsed.command === 'research') {
+          setIdvyStatus(`Idvy is looking up live research for @${callerName}...`);
+        } else if (parsed.command === 'validate') {
+          setIdvyStatus(`Idvy is thinking through this proposal with @${callerName}...`);
+        } else if (parsed.command === 'summarize') {
+          setIdvyStatus(parsed.targetMember ? `Idvy is highlighting @${parsed.targetMember}'s thoughts...` : `Idvy is putting together a summary for @${callerName}...`);
+        } else if (parsed.command === 'coreidea') {
+          setIdvyStatus(`Idvy is distilling the core vision with @${callerName}...`);
+        } else if (parsed.command === 'improve') {
+          setIdvyStatus(`Idvy is cooking up creative ideas for @${callerName}...`);
+        } else {
+          setIdvyStatus(`Idvy is typing a response for @${callerName}...`);
+        }
+
+        setTimeout(() => {
+          timelineEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 120);
+
+        (async () => {
+          try {
+            const aiResponse = await aiService.queryIdvy({
+              ideaId: idea.id,
+              userPrompt: userMessageContent,
+              idea,
+              members,
+              posts: updatedPostsList.length > 0 ? updatedPostsList : posts,
+              callerUser: currentUser
+            });
+
+            // Insert completed Idvy message into chat thread
+            const botPost = await postService.createPost(idea.id, {
+              content: aiResponse.content,
+              sender_type: 'ai',
+              agent_name: 'idvy',
+              ai_metadata: {
+                sources: aiResponse.sources || [],
+                command: aiResponse.command || parsed.command,
+                targetMember: parsed.targetMember
+              }
+            }, IDVY_BOT_USER);
+
+            setPosts(prev => {
+              const existingIdx = prev.findIndex(p => p.id === botPost.id);
+              if (existingIdx !== -1) {
+                const updated = [...prev];
+                updated[existingIdx] = botPost;
+                return updated;
+              }
+              return [...prev, botPost];
+            });
+
+            if (onUpdateIdeaStats) onUpdateIdeaStats(idea.id);
+
+            setTimeout(() => {
+              timelineEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }, 150);
+          } catch (aiErr) {
+            console.error('Idvy invocation error:', aiErr);
+            try {
+              await postService.createPost(idea.id, {
+                content: `⚠️ **Idvy Collaborator Notice**: ${aiErr.message || 'Unable to complete response. Please check AI access or verify your connection.'}`,
+                sender_type: 'ai',
+                agent_name: 'idvy'
+              }, IDVY_BOT_USER);
+            } catch (_) {}
+          } finally {
+            setIsIdvyThinking(false);
+            setIdvyStatus('Idvy is reviewing the discussion...');
+          }
+        })();
+      }
     } catch (err) {
       alert('Failed to post: ' + err.message);
     }
@@ -274,9 +745,6 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
   };
 
   const theme = getIdeaTheme(idea?.color_theme);
-  const isOwner = idea?.owner_id === currentUser?.id;
-  const isAdmin = currentUser?.role === 'admin' || currentUser?.email === 'tushrahul58@gmail.com';
-  const canManage = isOwner || isAdmin;
   const userMessagesCount = posts.filter(p => 
     (p.user_id === currentUser?.id || p.user?.email === currentUser?.email) && !p.is_system
   ).length;
@@ -319,33 +787,20 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
             title={`Theme: ${theme.name}`}
           />
 
-          {/* Title & subtle description */}
-          <div className="flex items-center gap-2 min-w-0">
+          {/* Title & subtle description / info trigger */}
+          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
             <h1 className="text-xs sm:text-sm font-bold text-slate-900 truncate max-w-[160px] sm:max-w-xs md:max-w-md">
               {idea.title}
             </h1>
 
-            {idea.description && (
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setShowDescriptionTooltip(prev => !prev)}
-                  className="p-0.5 rounded text-slate-400 hover:text-slate-600 hover:bg-black/5 transition"
-                  title="View description"
-                >
-                  <Info className="w-3.5 h-3.5" />
-                </button>
-                {showDescriptionTooltip && (
-                  <div 
-                    className="absolute left-0 top-full mt-1 w-64 p-2.5 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50 animate-fade-in leading-relaxed"
-                    onClick={() => setShowDescriptionTooltip(false)}
-                  >
-                    <p className="font-semibold text-slate-200 mb-0.5">Idea Summary</p>
-                    <p className="text-slate-300 font-normal">{idea.description}</p>
-                  </div>
-                )}
-              </div>
-            )}
+            <button
+              type="button"
+              onClick={() => setIsIdeaInfoOpen(true)}
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-black/5 transition"
+              title="Idea Overview, AI Details & Diagnostics"
+            >
+              <Info className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
 
@@ -371,6 +826,36 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
             <span className="text-[11px] text-slate-600 font-bold">{members.length}</span>
           </button>
 
+          {/* Off-the-Record Button (themed nicely to match other buttons) */}
+          <button
+            type="button"
+            onClick={() => {
+              if (!canUseOTR && !isOwner && !isAdmin) {
+                setNoticeModalConfig({
+                  isOpen: true,
+                  badge: 'lock',
+                  title: 'Off-Chat Access Reserved',
+                  message: `Off-the-Record private AI chat is reserved for the idea owner by default.\n\nThe idea owner (@${idea.owner_name || 'Owner'}) can grant you Off-chat access from Idea Settings -> AI Permissions.`
+                });
+                return;
+              }
+              setIsPrivateSidebarOpen(prev => !prev);
+            }}
+            className="px-2.5 sm:px-3 py-1 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 shadow-2xs active:scale-95"
+            style={
+              (!canUseOTR && !isOwner && !isAdmin)
+                ? { borderColor: '#e2e8f0', color: '#94a3b8', backgroundColor: 'rgba(241,245,249,0.85)' }
+                : isPrivateSidebarOpen
+                  ? { backgroundColor: theme.hex, borderColor: theme.hex, color: '#ffffff' }
+                  : { borderColor: theme.borderHex || '#e2e8f0', color: theme.hex, backgroundColor: 'rgba(255,255,255,0.9)' }
+            }
+            title={(!canUseOTR && !isOwner && !isAdmin) ? "Off-the-Record is reserved for idea owner by default (ask owner to grant access)" : isPrivateSidebarOpen ? "Close Off-the-Record" : "Open Off-the-Record space"}
+          >
+            <EyeOff className="w-3.5 h-3.5" style={{ color: (!canUseOTR && !isOwner && !isAdmin) ? '#94a3b8' : isPrivateSidebarOpen ? '#ffffff' : theme.hex }} />
+            <span className="hidden sm:inline">Off-the-Record</span>
+            {!canUseOTR && !isOwner && !isAdmin && <Lock className="w-2.5 h-2.5 text-slate-400" />}
+          </button>
+
           {/* Add / Invite Collaborator Button */}
           <button
             type="button"
@@ -383,7 +868,20 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
             <span className="hidden md:inline">Invite</span>
           </button>
 
-          {/* Mute / Unmute Idea Notifications Toggle */}
+          {/* Clear All My Messages Button (only shown if user has sent messages in this idea) */}
+          {userMessagesCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setIsClearMessagesOpen(true)}
+              className="px-2 sm:px-2.5 py-1 rounded-xl bg-white/90 hover:bg-rose-50 text-xs font-semibold text-rose-600 border border-rose-200/80 transition flex items-center gap-1 shadow-2xs"
+              title="Clear all my messages from this idea"
+            >
+              <Eraser className="w-3.5 h-3.5 text-rose-500" />
+              <span className="hidden lg:inline">Clear My Posts</span>
+            </button>
+          )}
+
+          {/* Mute / Unmute Idea Notifications Toggle (positioned to the left beside the Settings button) */}
           <button
             type="button"
             onClick={handleToggleMuteIdea}
@@ -400,19 +898,6 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
               <Bell className="w-3.5 h-3.5 text-slate-500" />
             )}
           </button>
-
-          {/* Clear All My Messages Button (only shown if user has sent messages in this idea) */}
-          {userMessagesCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setIsClearMessagesOpen(true)}
-              className="px-2 sm:px-2.5 py-1 rounded-xl bg-white/90 hover:bg-rose-50 text-xs font-semibold text-rose-600 border border-rose-200/80 transition flex items-center gap-1 shadow-2xs"
-              title="Clear all my messages from this idea"
-            >
-              <Eraser className="w-3.5 h-3.5 text-rose-500" />
-              <span className="hidden lg:inline">Clear My Posts</span>
-            </button>
-          )}
 
           {/* Settings Menu - ONLY visible for the author of the idea and admin, and NOT to members */}
           {canManage && (
@@ -460,6 +945,48 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
                       <>
                         <Copy className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
                         <span>Copy Idea ID</span>
+                      </>
+                    )}
+                  </button>
+
+                  {/* Idvy AI Permissions */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSettingsOpen(false);
+                      setIsAIAccessOpen(true);
+                    }}
+                    className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-semibold text-purple-700 hover:text-purple-900 hover:bg-purple-50/80 rounded-xl transition text-left"
+                    title="Manage Idvy AI Collaborator permissions"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-purple-600 flex-shrink-0" />
+                    <span>AI Permissions</span>
+                  </button>
+
+                  {/* Pause / Resume Idvy Option */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSettingsOpen(false);
+                      handleTogglePauseIdvy();
+                    }}
+                    disabled={isPausedByAdmin && !isAdmin}
+                    className={`w-full flex items-center gap-2 px-2.5 py-2 text-xs font-semibold rounded-xl transition text-left ${
+                      isPausedByAdmin && !isAdmin
+                        ? 'text-slate-400 bg-slate-50 cursor-not-allowed opacity-60'
+                        : 'text-slate-700 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                    title={isPausedByAdmin && !isAdmin ? "Paused by platform administrator (cannot resume)" : "Toggle Idvy active status"}
+                  >
+                    {isIdvyPaused ? (
+                      <>
+                        <Play className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
+                        <span>{isPausedByAdmin && !isAdmin ? 'Paused by Admin (Locked)' : 'Resume Idvy'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Pause className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+                        <span>Pause Idvy</span>
                       </>
                     )}
                   </button>
@@ -516,8 +1043,48 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
           />
         )}
 
-        {/* Main Chat Timeline & Composer Area */}
-        <div className="flex-1 flex flex-col h-full max-h-full max-w-4xl mx-auto w-full min-h-0 overflow-hidden px-2 sm:px-4">
+        {/* Main Chat Timeline & Composer Area (visible always, or side-by-side with Off-the-Record) */}
+        <div className={`flex-1 flex flex-col h-full max-h-full max-w-4xl mx-auto w-full min-h-0 overflow-hidden px-2 sm:px-4 ${isPrivateSidebarOpen ? 'hidden md:flex' : 'flex'}`}>
+          {/* Global Pause Idvy Alert Banner if paused globally */}
+          {aiService.isGlobalPaused() && (
+            <div className="my-1.5 px-3 py-1.5 rounded-xl bg-purple-50 border border-purple-200 text-purple-900 text-xs flex items-center gap-2 shadow-2xs flex-shrink-0 animate-fade-in">
+              <span className="p-1 rounded-lg bg-purple-200 text-purple-800">
+                <Pause className="w-3.5 h-3.5" />
+              </span>
+              <span>
+                <strong>Idvy Global Pause:</strong> Idvy is temporarily paused platform-wide by administrators.
+              </span>
+            </div>
+          )}
+
+          {/* Pause Idvy Alert Banner if paused */}
+          {isIdvyPaused && (
+            <div className="my-1.5 px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200/80 text-amber-900 text-xs flex items-center justify-between gap-2 shadow-2xs flex-shrink-0 animate-fade-in">
+              <div className="flex items-center gap-2">
+                <span className="p-1 rounded-lg bg-amber-200/70 text-amber-800">
+                  <Pause className="w-3.5 h-3.5" />
+                </span>
+                <span>
+                  <strong>Idvy is paused.</strong> {isPausedByAdmin ? 'Paused by platform administrator.' : 'Mentions and auto-replies are paused.'}
+                </span>
+              </div>
+              {isPausedByAdmin && !isAdmin ? (
+                <span className="text-[11px] font-bold text-amber-800 bg-amber-200/80 px-2 py-0.5 rounded-lg">
+                  Paused by Admin (Locked)
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => handleTogglePauseIdvy(false)}
+                  className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs transition flex items-center gap-1 shadow-2xs active:scale-95"
+                >
+                  <Play className="w-3 h-3 fill-white" />
+                  <span>Resume</span>
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Discussion Timeline Feed (Scrollable messages) */}
           <div className="flex-1 overflow-y-auto min-h-0 py-3 space-y-2 sm:space-y-3 overscroll-contain">
             {loading ? (
@@ -533,9 +1100,16 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
                       onReply={(p) => setReplyingTo(p)}
                       onSelectPerson={(u) => setSelectedPersonForFilter(u)}
                       onJumpToMessage={handleJumpToMessage}
+                      isIdeaAuthor={isIdeaAuthor}
+                      onDeleteAllIdvyPosts={handleDeleteAllIdvyPosts}
+                      canUseOTR={canUseOTR || isOwner || isAdmin}
+                      onAskIdvyInOTR={(canUseOTR || isOwner || isAdmin) ? handleAskIdvyInOTR : null}
                     />
                   </div>
                 ))}
+                {isIdvyThinking && (
+                  <IdvyTypingIndicator status={idvyStatus} />
+                )}
                 <div ref={timelineEndRef} />
               </>
             ) : (
@@ -560,9 +1134,50 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
               members={members}
               replyingTo={replyingTo}
               onCancelReply={() => setReplyingTo(null)}
+              prefillContent={composerPrefill}
+              onClearPrefill={() => setComposerPrefill('')}
+              hasAIAccess={hasAIAccess}
+              canTagAI={canTagAI || isOwner || isAdmin}
+              onBlockedAIAttempt={() => {
+                setNoticeModalConfig({
+                  isOpen: true,
+                  badge: 'lock',
+                  title: 'Tagging Access Reserved',
+                  message: `Mentioning @Idvy in the main discussion requires Tagging access.\n\nThe idea owner (@${idea.owner_name || 'Owner'}) can grant you Tagging (@Idvy) access from Idea Settings -> AI Permissions.`
+                });
+              }}
             />
           </div>
         </div>
+
+        {/* Embedded In-Chat Off-the-Record Space */}
+        {isPrivateSidebarOpen && (
+          <ErrorBoundary
+            title="Off-the-Record Chat Unavailable"
+            onClose={() => setIsPrivateSidebarOpen(false)}
+            onReset={() => setIsPrivateSidebarOpen(false)}
+          >
+            <IdvyPrivateSidebar
+              isOpen={isPrivateSidebarOpen}
+              onClose={() => setIsPrivateSidebarOpen(false)}
+              idea={idea}
+              posts={posts}
+              members={members}
+              currentUser={currentUser}
+              canUseOTR={canUseOTR || isOwner || isAdmin}
+              initialPrompt={privateSidebarPrompt}
+              onClearInitialPrompt={() => setPrivateSidebarPrompt('')}
+              onSendToIdeaChat={async (msgText) => {
+                await handlePostCreated({ content: msgText });
+              }}
+              onSendAsIdvyToChat={handleSendAsIdvyToChat}
+              onSendToComposer={(text) => {
+                setComposerPrefill(text);
+              }}
+              onAnswerInMainChat={handleAnswerInMainChat}
+            />
+          </ErrorBoundary>
+        )}
       </div>
 
       {/* Clear All My Messages Modal */}
@@ -591,6 +1206,15 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
         onMemberRemoved={handleMemberRemoved}
       />
 
+      {/* AI Access Manager Modal */}
+      <AIAccessManagerModal
+        isOpen={isAIAccessOpen}
+        onClose={() => setIsAIAccessOpen(false)}
+        idea={idea}
+        members={members}
+        currentUser={currentUser}
+      />
+
       {/* Custom Delete Post Confirmation Modal */}
       <DeletePostModal
         isOpen={!!postToDelete}
@@ -598,6 +1222,25 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
         post={postToDelete}
         onConfirm={handleConfirmDeletePost}
         isDeleting={isDeletingPost}
+      />
+
+      {/* Idea Overview & Diagnostics Info Modal */}
+      <IdeaInfoModal
+        isOpen={isIdeaInfoOpen}
+        onClose={() => setIsIdeaInfoOpen(false)}
+        idea={idea}
+        members={members}
+        postsCount={posts.length}
+        isIdvyPaused={isIdvyPaused}
+      />
+
+      {/* Styled In-App Notice & Access Modal */}
+      <NoticeModal
+        isOpen={noticeModalConfig.isOpen}
+        onClose={() => setNoticeModalConfig(prev => ({ ...prev, isOpen: false }))}
+        badge={noticeModalConfig.badge}
+        title={noticeModalConfig.title}
+        message={noticeModalConfig.message}
       />
     </div>
   );

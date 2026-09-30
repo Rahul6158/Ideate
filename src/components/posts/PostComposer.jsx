@@ -1,22 +1,27 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   Mic, 
+  AudioLines,
   Image as ImageIcon, 
   Paperclip, 
   X, 
   Send, 
   FileText,
-  Sparkles,
   Square,
   Play,
   Pause,
   RefreshCw,
   Check,
   AtSign,
-  CornerUpLeft
+  CornerUpLeft,
+  AlertCircle,
+  Sparkles
 } from 'lucide-react';
+import { stripMarkdown } from '../../utils/textUtils';
 import { storageService } from '../../services/storageService';
 import { getRandomAvatar } from '../../data/avatars';
+import SlashCommandMenu from '../ai/SlashCommandMenu';
+import { IDVY_BOT_USER, IDVY_SLASH_COMMANDS } from '../../services/aiService';
 
 // Generates a pleasant synthesized WAV chime audio blob if microphone is unavailable or blocked
 function createSynthesizedAudioBlob(durationSec = 6) {
@@ -63,8 +68,14 @@ export default function PostComposer({
   theme = null,
   members = [],
   replyingTo = null,
-  onCancelReply
+  onCancelReply,
+  prefillContent = '',
+  onClearPrefill = null,
+  hasAIAccess = true,
+  canTagAI = true,
+  onBlockedAIAttempt = null
 }) {
+  const effectiveCanTag = typeof canTagAI === 'boolean' ? canTagAI : hasAIAccess;
   const [content, setContent] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -74,6 +85,16 @@ export default function PostComposer({
   // Mention State
   const [showMentionMenu, setShowMentionMenu] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
+  const [activeMentionIdx, setActiveMentionIdx] = useState(0);
+
+  // Slash Command Menu State
+  const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [slashQuery, setSlashQuery] = useState('');
+  const [activeSlashIdx, setActiveSlashIdx] = useState(0);
+
+  const mentionMenuRef = useRef(null);
+  const tagButtonRef = useRef(null);
+  const slashMenuRef = useRef(null);
 
   // Speech-to-text state
   const [isListening, setIsListening] = useState(false);
@@ -131,6 +152,71 @@ export default function PostComposer({
       }
     };
   }, []);
+
+  // Sync external prefill content (e.g. sent from Off-the-Record "Send to Input Box")
+  useEffect(() => {
+    if (prefillContent) {
+      setContent(prefillContent);
+      if (onClearPrefill) onClearPrefill();
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          textareaRef.current.style.height = 'auto';
+          textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 220)}px`;
+        }
+      }, 60);
+    }
+  }, [prefillContent]);
+
+  // Dismiss mention & slash menus when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (
+        showMentionMenu &&
+        mentionMenuRef.current &&
+        !mentionMenuRef.current.contains(e.target) &&
+        tagButtonRef.current &&
+        !tagButtonRef.current.contains(e.target)
+      ) {
+        setShowMentionMenu(false);
+      }
+
+      if (
+        showSlashMenu &&
+        slashMenuRef.current &&
+        !slashMenuRef.current.contains(e.target)
+      ) {
+        setShowSlashMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [showMentionMenu, showSlashMenu]);
+
+  // Reset active mention index when query or menu visibility changes
+  useEffect(() => {
+    setActiveMentionIdx(0);
+  }, [mentionQuery, showMentionMenu]);
+
+  // Reset active slash index when query or menu visibility changes
+  useEffect(() => {
+    setActiveSlashIdx(0);
+  }, [slashQuery, showSlashMenu]);
+
+  // Keep highlighted mention item visible in scroll container
+  useEffect(() => {
+    if (showMentionMenu && mentionMenuRef.current) {
+      const activeEl = mentionMenuRef.current.querySelector(`[data-mention-index="${activeMentionIdx}"]`);
+      if (activeEl) {
+        activeEl.scrollIntoView({ block: 'nearest' });
+      }
+    }
+  }, [activeMentionIdx, showMentionMenu]);
 
   // START RECORDING
   const startInlineRecording = async () => {
@@ -405,21 +491,34 @@ export default function PostComposer({
     setAttachments(prev => prev.filter((_, i) => i !== index));
   };
 
-  // HANDLE CONTENT CHANGE FOR @MENTIONS
+  // HANDLE CONTENT CHANGE FOR @MENTIONS & /SLASH COMMANDS
   const handleTextChange = (e) => {
     const val = e.target.value;
     setContent(val);
 
-    // Check if the user is typing an @mention
     const cursor = e.target.selectionStart;
     const textBeforeCursor = val.slice(0, cursor);
-    const lastAtIdx = textBeforeCursor.lastIndexOf('@');
 
+    // 1. Check for /slash or . command menu at the start of input or start of line
+    const slashMatch = textBeforeCursor.match(/(?:^|\n)[/.]([a-zA-Z0-9._]*)$/);
+    if (slashMatch) {
+      setSlashQuery(slashMatch[1].toLowerCase());
+      setShowSlashMenu(true);
+      setShowMentionMenu(false);
+      return;
+    } else {
+      setShowSlashMenu(false);
+    }
+
+    // 2. Check if the user is typing an @mention
+    const lastAtIdx = textBeforeCursor.lastIndexOf('@');
     if (lastAtIdx !== -1 && (lastAtIdx === 0 || /\s/.test(textBeforeCursor[lastAtIdx - 1]))) {
       const query = textBeforeCursor.slice(lastAtIdx + 1);
-      if (!query.includes(' ') || query.length < 15) {
+      // Mention query must NOT contain spaces or newlines, and be under 30 characters
+      if (!/\s/.test(query) && query.length <= 30) {
         setMentionQuery(query.toLowerCase());
         setShowMentionMenu(true);
+        setShowSlashMenu(false);
         return;
       }
     }
@@ -428,17 +527,58 @@ export default function PostComposer({
 
   const insertMention = (member) => {
     const name = member.display_name || member.email?.split('@')[0] || 'member';
-    const cursor = textareaRef.current?.selectionStart || content.length;
+    const cursor = textareaRef.current?.selectionStart ?? content.length;
     const textBeforeCursor = content.slice(0, cursor);
     const textAfterCursor = content.slice(cursor);
     const lastAtIdx = textBeforeCursor.lastIndexOf('@');
 
-    const newBefore = lastAtIdx !== -1 ? textBeforeCursor.slice(0, lastAtIdx) : textBeforeCursor;
-    const updatedContent = `${newBefore}@${name} ${textAfterCursor}`;
+    let updatedContent;
+    let newCursorPos;
+
+    if (lastAtIdx !== -1 && (lastAtIdx === 0 || /\s/.test(textBeforeCursor[lastAtIdx - 1]))) {
+      const newBefore = textBeforeCursor.slice(0, lastAtIdx);
+      const mentionText = `@${name} `;
+      updatedContent = `${newBefore}${mentionText}${textAfterCursor}`;
+      newCursorPos = (newBefore + mentionText).length;
+    } else {
+      const needsSpaceBefore = textBeforeCursor.length > 0 && !textBeforeCursor.endsWith(' ');
+      const mentionText = `${needsSpaceBefore ? ' ' : ''}@${name} `;
+      updatedContent = `${textBeforeCursor}${mentionText}${textAfterCursor}`;
+      newCursorPos = (textBeforeCursor + mentionText).length;
+    }
 
     setContent(updatedContent);
     setShowMentionMenu(false);
-    textareaRef.current?.focus();
+    setActiveMentionIdx(0);
+
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+      }
+    }, 10);
+  };
+
+  const insertSlashCommand = (cmd) => {
+    const cursor = textareaRef.current?.selectionStart || content.length;
+    const textBeforeCursor = content.slice(0, cursor);
+    const textAfterCursor = content.slice(cursor);
+    const lastSlashIdx = Math.max(textBeforeCursor.lastIndexOf('/'), textBeforeCursor.lastIndexOf('.'));
+
+    const newBefore = lastSlashIdx !== -1 ? textBeforeCursor.slice(0, lastSlashIdx) : textBeforeCursor;
+    const commandText = `/${cmd.command} `;
+    const updatedContent = `${newBefore}${commandText}${textAfterCursor}`;
+    const newCursorPos = (newBefore + commandText).length;
+
+    setContent(updatedContent);
+    setShowSlashMenu(false);
+    setActiveSlashIdx(0);
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+      }
+    }, 10);
   };
 
   // STRICT DOUBLE-SUBMIT GUARD
@@ -450,6 +590,14 @@ export default function PostComposer({
       return;
     }
     if (!content.trim() && attachments.length === 0) return;
+
+    // Check if user is attempting to tag @Idvy without Tagging access
+    if (!effectiveCanTag && /@idvy\b/i.test(content)) {
+      if (onBlockedAIAttempt) {
+        onBlockedAIAttempt('tag');
+      }
+      return;
+    }
 
     if (composerAudioRef.current) {
       composerAudioRef.current.pause();
@@ -464,16 +612,18 @@ export default function PostComposer({
         return rest;
       });
 
-      await onPostCreated({
+      const payload = {
         content: content.trim(),
         attachments: cleanAttachments,
         reply_to: replyingTo ? {
           id: replyingTo.id,
           user_name: replyingTo.user?.display_name || 'Member',
-          content: (replyingTo.content || 'Attached file').slice(0, 100),
+          content: stripMarkdown(replyingTo.content || 'Attached file').slice(0, 100),
           user_avatar: replyingTo.user?.avatar_url
         } : null
-      });
+      };
+
+      // IMMEDIATELY clear input text and attachments so input doesn't linger while AI thinks
       setContent('');
       setAttachments([]);
       if (onCancelReply) onCancelReply();
@@ -481,6 +631,12 @@ export default function PostComposer({
         speechRecognitionRef.current.stop();
         setIsListening(false);
       }
+      if (textareaRef.current) {
+        textareaRef.current.value = '';
+        textareaRef.current.style.height = 'auto';
+      }
+
+      await onPostCreated(payload);
     } catch (err) {
       alert('Failed to post: ' + err.message);
     } finally {
@@ -494,12 +650,53 @@ export default function PostComposer({
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  // Filter members for @mention dropdown
-  const filteredMembers = (members || []).filter(m => {
+  // Filter members for @mention dropdown (only include Idvy if user has Tagging access)
+  const allMentionCandidates = [
+    ...(effectiveCanTag ? [IDVY_BOT_USER] : []),
+    ...(members || []).filter(m => m.user_id !== IDVY_BOT_USER.id && m.id !== IDVY_BOT_USER.id)
+  ];
+
+  const filteredMembers = allMentionCandidates.filter(m => {
     const name = (m.display_name || '').toLowerCase();
     const email = (m.email || '').toLowerCase();
     return name.includes(mentionQuery) || email.includes(mentionQuery);
   });
+
+  const cleanSlashQuery = (slashQuery || '').replace(/^\//, '').toLowerCase();
+  const filteredSlashCommands = IDVY_SLASH_COMMANDS.filter(cmd => 
+    cmd.command.toLowerCase().includes(cleanSlashQuery) || 
+    cmd.description.toLowerCase().includes(cleanSlashQuery) ||
+    cmd.category.toLowerCase().includes(cleanSlashQuery) ||
+    cmd.syntax.toLowerCase().includes(cleanSlashQuery)
+  );
+
+  // Validate if user has started typing a slash command that is incomplete
+  const trimmedContent = content.trim();
+  let slashValidation = { isIncomplete: false, message: '' };
+
+  if (trimmedContent.startsWith('/')) {
+    const parts = trimmedContent.slice(1).split(/\s+/);
+    const cmdName = parts[0]?.toLowerCase() || '';
+    const param = parts.slice(1).join(' ').trim();
+
+    const exactCmd = IDVY_SLASH_COMMANDS.find(c => c.command.toLowerCase() === cmdName);
+    const partialMatch = IDVY_SLASH_COMMANDS.find(c => c.command.toLowerCase().startsWith(cmdName));
+
+    if (!exactCmd) {
+      slashValidation = {
+        isIncomplete: true,
+        message: `Command incomplete: Finish typing /${partialMatch ? partialMatch.command : 'command'} or choose from the menu`
+      };
+    } else if (exactCmd.requiresParam && !param) {
+      slashValidation = {
+        isIncomplete: true,
+        message: `Parameter required: ${exactCmd.syntax} — please provide ${exactCmd.paramName || 'arguments'}`
+      };
+    }
+  }
+
+  // Extract all currently tagged @mentions to highlight them clearly
+  const detectedMentions = Array.from(new Set(content.match(/@[a-zA-Z0-9_.-]+/g) || []));
 
   return (
     <>
@@ -509,7 +706,7 @@ export default function PostComposer({
         onEnded={() => setPlayingAudioIdx(null)} 
       />
 
-      <div className="relative bg-white border border-slate-200/90 rounded-2xl shadow-xs transition-colors overflow-visible focus-within:border-blue-400">
+      <div className="relative bg-white/95 backdrop-blur-sm border border-slate-200/90 rounded-2xl shadow-xs transition-all duration-200 overflow-visible focus-within:border-blue-500/60 focus-within:ring-2 focus-within:ring-blue-500/10 focus-within:shadow-sm">
         
         {/* ======================================================== */}
         {/* REPLIED MESSAGE BANNER                                   */}
@@ -522,7 +719,7 @@ export default function PostComposer({
                 Replying to {replyingTo.user?.display_name || 'Member'}:
               </span>
               <span className="text-blue-600/80 truncate italic">
-                "{replyingTo.content || 'Attached file'}"
+                "{stripMarkdown(replyingTo.content || 'Attached file')}"
               </span>
             </div>
             <button
@@ -537,41 +734,114 @@ export default function PostComposer({
         )}
 
         {/* ======================================================== */}
+        {/* TAGGED PARTICIPANTS HIGHLIGHT BAR                        */}
+        {/* ======================================================== */}
+        {detectedMentions.length > 0 && (
+          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-purple-50/80 via-blue-50/80 to-purple-50/40 border-b border-purple-100/80 text-[11px] overflow-x-auto no-scrollbar animate-fade-in">
+            <span className="text-slate-500 font-bold flex items-center gap-1 flex-shrink-0">
+              <AtSign className="w-3 h-3 text-purple-600" />
+              <span>Tagged:</span>
+            </span>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {detectedMentions.map((mention, idx) => {
+                const isIdvy = mention.toLowerCase() === '@idvy';
+                return (
+                  <span
+                    key={idx}
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-bold transition shadow-2xs ${
+                      isIdvy
+                        ? 'bg-purple-100 text-purple-900 border border-purple-300/80 ring-1 ring-purple-400/40'
+                        : 'bg-blue-100 text-blue-900 border border-blue-300/80 ring-1 ring-blue-400/40'
+                    }`}
+                  >
+                    <span>{mention}</span>
+                    {isIdvy && <Sparkles className="w-2.5 h-2.5 text-purple-600 fill-purple-100" />}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* SLASH COMMAND POPUP MENU                                 */}
+        {/* ======================================================== */}
+        {showSlashMenu && (
+          <div ref={slashMenuRef}>
+            <SlashCommandMenu
+              query={slashQuery}
+              activeIndex={activeSlashIdx}
+              onHoverIndex={setActiveSlashIdx}
+              onSelectCommand={insertSlashCommand}
+            />
+          </div>
+        )}
+
+        {/* ======================================================== */}
         {/* @ MENTION POPUP MENU                                     */}
         {/* ======================================================== */}
-        {showMentionMenu && (
-          <div className="absolute left-3 bottom-full mb-2 w-64 max-h-48 overflow-y-auto bg-white rounded-2xl shadow-2xl border border-slate-200 p-1.5 z-50 animate-scale-in">
-            <div className="px-2.5 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-              Tag Collaborator
+        {showMentionMenu && filteredMembers.length > 0 && (
+          <div 
+            ref={mentionMenuRef}
+            className="absolute left-3 bottom-full mb-2 w-72 sm:w-80 max-h-60 overflow-y-auto bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200/90 p-1.5 z-50 animate-scale-in"
+          >
+            <div className="px-2.5 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between border-b border-slate-100 mb-1">
+              <span>Tag Collaborator</span>
+              <span className="text-[10px] text-slate-400 font-normal lowercase">↑↓ navigate · ↵ select · esc</span>
             </div>
-            {filteredMembers.length === 0 ? (
-              <div className="p-2.5 text-xs text-slate-400 text-center italic">
-                No collaborators found
+              <div className="space-y-0.5">
+                {filteredMembers.map((m, index) => {
+                  const isSelected = index === activeMentionIdx;
+                  const isIdvy = m.is_ai || m.id === IDVY_BOT_USER.id || m.email === 'idvy@ideate.app';
+                  return (
+                    <button
+                      key={m.id || m.email || index}
+                      data-mention-index={index}
+                      type="button"
+                      onMouseEnter={() => setActiveMentionIdx(index)}
+                      onClick={() => insertMention(m)}
+                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl transition text-left ${
+                        isSelected 
+                          ? 'bg-blue-50 text-blue-900 ring-1 ring-blue-300/50' 
+                          : 'hover:bg-slate-50 text-slate-700'
+                      }`}
+                    >
+                      <div className="relative flex-shrink-0">
+                        <img
+                          src={m.avatar_url || getRandomAvatar(m.email || m.display_name)}
+                          alt={m.display_name}
+                          className={`w-7 h-7 rounded-full object-cover ring-1 ${
+                            isIdvy ? 'ring-purple-400 p-0.5 bg-gradient-to-tr from-purple-700 to-indigo-600' : 'ring-slate-200'
+                          }`}
+                        />
+                        {isIdvy && (
+                          <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-purple-600 rounded-full ring-1 ring-white" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold truncate">
+                            {m.display_name || 'Member'}
+                          </span>
+                          {isIdvy && (
+                            <span className="px-1.5 py-0.2 rounded-md bg-purple-100 text-purple-700 text-[9px] font-bold uppercase tracking-wider">
+                              AI Friend
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-mono truncate">
+                          {isIdvy ? 'Smart & enthusiastic idea collaborator' : m.email}
+                        </div>
+                      </div>
+                      {isSelected && (
+                        <span className="text-[10px] text-blue-500 font-medium flex-shrink-0">
+                          ↵
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
-            ) : (
-              filteredMembers.map((m) => (
-                <button
-                  key={m.id || m.email}
-                  type="button"
-                  onClick={() => insertMention(m)}
-                  className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-slate-100 transition text-left"
-                >
-                  <img
-                    src={m.avatar_url || getRandomAvatar(m.email || m.display_name)}
-                    alt={m.display_name}
-                    className="w-6 h-6 rounded-full object-cover ring-1 ring-slate-200 flex-shrink-0"
-                  />
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold text-slate-900 truncate">
-                      {m.display_name || 'Member'}
-                    </div>
-                    <div className="text-[10px] text-slate-400 font-mono truncate">
-                      {m.email}
-                    </div>
-                  </div>
-                </button>
-              ))
-            )}
           </div>
         )}
 
@@ -715,16 +985,20 @@ export default function PostComposer({
         {/* 3. SPEECH-TO-TEXT LISTENING BANNER                       */}
         {/* ======================================================== */}
         {isListening && (
-          <div className="flex items-center justify-between bg-indigo-50 border-b border-indigo-200/70 px-3.5 py-1.5 text-xs text-indigo-700 animate-pulse">
+          <div className="flex items-center justify-between bg-indigo-50/90 border-b border-indigo-100 px-3.5 py-1.5 text-xs text-indigo-700 animate-fade-in">
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-indigo-600 animate-ping"></span>
-              <span className="font-semibold">Listening... speak naturally to type</span>
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-600"></span>
+              </span>
+              <span className="font-medium">Listening... speak naturally to type</span>
             </div>
             <button 
+              type="button"
               onClick={toggleSpeechToText}
-              className="text-indigo-800 font-bold underline hover:text-indigo-900"
+              className="px-2 py-0.5 rounded-md text-xs font-semibold text-indigo-700 hover:text-indigo-900 hover:bg-indigo-100 transition"
             >
-              Stop
+              Done
             </button>
           </div>
         )}
@@ -790,17 +1064,17 @@ export default function PostComposer({
           </div>
         )}
 
-        {/* Textarea - sleek and compact, ZERO box flash on click */}
-        <div className="px-3 pt-2">
+        {/* Textarea - sleek and modern typography */}
+        <div className="px-3 pt-2.5 pb-1">
           <textarea
             ref={textareaRef}
             value={content}
             onChange={handleTextChange}
-            placeholder="Type a message, mention with @, or share thoughts... (Enter to post, Shift+Enter for new line)"
+            placeholder="Type a message, mention with @, or type / for commands..."
             rows={1}
             autoComplete="off"
             spellCheck="false"
-            className="w-full text-xs sm:text-sm text-slate-800 placeholder-slate-400 bg-transparent resize-none leading-normal max-h-24 overflow-y-auto block outline-none border-none shadow-none ring-0 select-text"
+            className="w-full text-xs sm:text-sm text-slate-800 placeholder-slate-400 bg-transparent resize-none leading-relaxed min-h-[40px] max-h-28 overflow-y-auto block outline-none border-none shadow-none ring-0 select-text font-normal"
             style={{
               outline: 'none',
               boxShadow: 'none',
@@ -809,32 +1083,108 @@ export default function PostComposer({
               WebkitFocusRingColor: 'transparent'
             }}
             onKeyDown={(e) => {
+              // 1. If Slash menu is open, handle Arrow keys, Enter/Tab, and Escape
+              if (showSlashMenu) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  if (filteredSlashCommands.length > 0) {
+                    setActiveSlashIdx(prev => (prev + 1) % filteredSlashCommands.length);
+                  }
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  if (filteredSlashCommands.length > 0) {
+                    setActiveSlashIdx(prev => (prev - 1 + filteredSlashCommands.length) % filteredSlashCommands.length);
+                  }
+                  return;
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  e.preventDefault();
+                  if (filteredSlashCommands.length > 0 && filteredSlashCommands[activeSlashIdx]) {
+                    insertSlashCommand(filteredSlashCommands[activeSlashIdx]);
+                  }
+                  return;
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setShowSlashMenu(false);
+                  return;
+                }
+              }
+
+              // 2. If Mention menu is open, handle Arrow keys, Enter/Tab, and Escape
+              if (showMentionMenu) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  if (filteredMembers.length > 0) {
+                    setActiveMentionIdx(prev => (prev + 1) % filteredMembers.length);
+                  }
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  if (filteredMembers.length > 0) {
+                    setActiveMentionIdx(prev => (prev - 1 + filteredMembers.length) % filteredMembers.length);
+                  }
+                  return;
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  e.preventDefault();
+                  if (filteredMembers.length > 0 && filteredMembers[activeMentionIdx]) {
+                    insertMention(filteredMembers[activeMentionIdx]);
+                  }
+                  return;
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setShowMentionMenu(false);
+                  return;
+                }
+              }
+
+              // 3. Normal Enter to post
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
+                if (slashValidation.isIncomplete) {
+                  return;
+                }
                 handleSubmit();
               }
             }}
           />
         </div>
 
-        {/* Compact Action Toolbar */}
-        <div className="flex items-center justify-between px-3 py-1.5 border-t border-slate-100 bg-slate-50/50">
-          <div className="flex items-center gap-1 sm:gap-1.5">
-            {/* Tag Collaborator with @ button */}
+        {/* Slash command incomplete constraint notice */}
+        {slashValidation.isIncomplete && (
+          <div className="mx-3 mb-1.5 px-2.5 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 font-medium flex items-center gap-2 animate-fade-in">
+            <AlertCircle className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+            <span>{slashValidation.message}</span>
+          </div>
+        )}
+
+        {/* Modern Icon Toolbar (Clean, icon-based, no clutter) */}
+        <div className="flex items-center justify-between px-2.5 py-1.5 border-t border-slate-100 bg-slate-50/60 rounded-b-2xl">
+          <div className="flex items-center gap-0.5 sm:gap-1">
+            {/* Tag Collaborator (@mention) */}
             <button
+              ref={tagButtonRef}
               type="button"
               onClick={() => {
                 setShowMentionMenu(!showMentionMenu);
                 setMentionQuery('');
+                setActiveMentionIdx(0);
                 textareaRef.current?.focus();
               }}
-              className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 transition"
+              className={`p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 transition active:scale-95 ${
+                showMentionMenu ? 'bg-blue-100/70 text-blue-600 ring-1 ring-blue-300/60' : ''
+              }`}
               title="Tag a collaborator (@mention)"
             >
-              <AtSign className="w-3.5 h-3.5 text-blue-500" />
-              <span className="hidden sm:inline">Tag</span>
+              <AtSign className="w-4 h-4 text-blue-500" />
             </button>
-            {/* Inline Voice Record Trigger */}
+
+            {/* Inline Voice Note Recorder Trigger */}
             <button
               type="button"
               onClick={() => {
@@ -846,41 +1196,38 @@ export default function PostComposer({
                   startInlineRecording();
                 }
               }}
-              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition ${
+              className={`p-1.5 rounded-lg transition active:scale-95 ${
                 voiceRecorderState !== 'idle'
-                  ? 'bg-rose-100 text-rose-700'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                  ? 'bg-rose-100 text-rose-700 ring-1 ring-rose-300/60'
+                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/60'
               }`}
-              title="Record voice note directly at top of input box"
+              title={voiceRecorderState === 'recording' ? "Stop recording voice note" : "Record voice note"}
             >
-              <Mic className={`w-3.5 h-3.5 ${voiceRecorderState === 'recording' ? 'text-rose-600 animate-pulse' : 'text-slate-500'}`} />
-              <span>Voicenote</span>
+              <AudioLines className={`w-4 h-4 ${voiceRecorderState === 'recording' ? 'text-rose-600 animate-pulse' : 'text-slate-500'}`} />
             </button>
 
-            {/* Speak-to-text button */}
+            {/* Speech-to-text / Voice typing (Clean mic icon without stars) */}
             <button
               type="button"
               onClick={toggleSpeechToText}
-              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition ${
+              className={`p-1.5 rounded-lg transition active:scale-95 ${
                 isListening
-                  ? 'bg-indigo-100 text-indigo-700'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                  ? 'bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300/60'
+                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/60'
               }`}
-              title="Speak to type text"
+              title={isListening ? "Stop voice typing" : "Voice typing (Speech-to-text)"}
             >
-              <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
-              <span className="hidden sm:inline">Speech</span>
+              <Mic className={`w-4 h-4 ${isListening ? 'text-indigo-600 animate-pulse' : 'text-slate-500'}`} />
             </button>
 
-            {/* Image Upload Button (Multiple selection supported) */}
+            {/* Image Upload Button */}
             <button
               type="button"
               onClick={() => imageInputRef.current?.click()}
-              className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 transition"
+              className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 transition active:scale-95"
               title="Attach images (select one or multiple)"
             >
-              <ImageIcon className="w-3.5 h-3.5 text-slate-500" />
-              <span className="hidden sm:inline">Images</span>
+              <ImageIcon className="w-4 h-4 text-slate-500" />
             </button>
             <input
               type="file"
@@ -891,15 +1238,14 @@ export default function PostComposer({
               onChange={handleImageSelect}
             />
 
-            {/* File Upload Button (Multiple selection supported) */}
+            {/* File Upload Button */}
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 transition"
+              className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 transition active:scale-95"
               title="Attach files (select one or multiple)"
             >
-              <Paperclip className="w-3.5 h-3.5 text-slate-500" />
-              <span className="hidden sm:inline">Files</span>
+              <Paperclip className="w-4 h-4 text-slate-500" />
             </button>
             <input
               type="file"
@@ -914,17 +1260,18 @@ export default function PostComposer({
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={(!content.trim() && attachments.length === 0) || isSubmitting || attachments.some(a => a.isUploading)}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-              (!content.trim() && attachments.length === 0) || isSubmitting || attachments.some(a => a.isUploading)
+            disabled={(!content.trim() && attachments.length === 0) || isSubmitting || attachments.some(a => a.isUploading) || slashValidation.isIncomplete}
+            className={`h-7 sm:h-8 px-3 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+              (!content.trim() && attachments.length === 0) || isSubmitting || attachments.some(a => a.isUploading) || slashValidation.isIncomplete
                 ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
                 : 'text-white shadow-2xs hover:opacity-95 active:scale-95'
             }`}
             style={{
-              backgroundColor: (!content.trim() && attachments.length === 0) || isSubmitting || attachments.some(a => a.isUploading)
+              backgroundColor: (!content.trim() && attachments.length === 0) || isSubmitting || attachments.some(a => a.isUploading) || slashValidation.isIncomplete
                 ? undefined
                 : (theme?.hex || '#2563EB')
             }}
+            title={slashValidation.isIncomplete ? slashValidation.message : "Post message (Enter)"}
           >
             {isSubmitting ? (
               <span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>

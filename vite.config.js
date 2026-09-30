@@ -104,6 +104,45 @@ function pushNotificationDevPlugin() {
           res.end();
         }
       });
+
+      server.middlewares.use('/api/idvy-chat', async (req, res) => {
+        if (req.method === 'POST') {
+          let body = '';
+          req.on('data', (chunk) => {
+            body += chunk;
+          });
+          req.on('end', async () => {
+            try {
+              const { default: idvyHandler } = await import('./api/idvy-chat.js');
+              const mockReq = {
+                method: req.method,
+                headers: req.headers,
+                body: JSON.parse(body || '{}')
+              };
+              const mockRes = {
+                statusCode: 200,
+                status(code) {
+                  this.statusCode = code;
+                  res.statusCode = code;
+                  return this;
+                },
+                json(payload) {
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify(payload));
+                }
+              };
+              await idvyHandler(mockReq, mockRes);
+            } catch (err) {
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: err.message }));
+            }
+          });
+        } else {
+          res.statusCode = 405;
+          res.end();
+        }
+      });
     }
   };
 }

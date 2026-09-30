@@ -3,19 +3,41 @@ import { getRandomAvatar } from '../data/avatars';
 
 export const memberService = {
   async getMembers(ideaId) {
+    const idvyBotMember = {
+      id: '00000000-0000-0000-0000-000000001d71',
+      user_id: '00000000-0000-0000-0000-000000001d71',
+      role: 'AI Collaborator & Friend',
+      display_name: 'Idvy',
+      email: 'idvy@ideate.app',
+      avatar_url: '/avatars/idvy-avatar.avif',
+      is_ai: true
+    };
+
+    let list = [];
     if (isSupabaseConfigured) {
       try {
-        const { data, error } = await supabase
-          .from('idea_members')
-          .select(`
-            id,
-            role,
-            created_at,
-            profiles:user_id(id, email, display_name, avatar_url, role)
-          `)
-          .eq('idea_id', ideaId);
-        if (!error && data) {
-          return data.map(m => ({
+        const [membersRes, ideaRes] = await Promise.all([
+          supabase
+            .from('idea_members')
+            .select(`
+              id,
+              role,
+              created_at,
+              profiles:user_id(id, email, display_name, avatar_url, role)
+            `)
+            .eq('idea_id', ideaId),
+          supabase
+            .from('ideas')
+            .select(`
+              owner_id,
+              owner:profiles!ideas_owner_id_fkey(id, email, display_name, avatar_url)
+            `)
+            .eq('id', ideaId)
+            .maybeSingle()
+        ]);
+
+        if (!membersRes.error && membersRes.data) {
+          list = membersRes.data.map(m => ({
             id: m.id,
             role: m.role || 'Member',
             user_id: m.profiles?.id,
@@ -24,12 +46,32 @@ export const memberService = {
             avatar_url: m.profiles?.avatar_url
           }));
         }
+
+        // Add owner if not already in list
+        const owner = ideaRes.data?.owner;
+        if (owner?.id && !list.some(m => m.user_id === owner.id)) {
+          list.unshift({
+            id: 'owner-' + owner.id,
+            role: 'Owner',
+            user_id: owner.id,
+            email: owner.email,
+            display_name: owner.display_name,
+            avatar_url: owner.avatar_url
+          });
+        }
       } catch (err) {
         console.warn('Supabase getMembers error:', err.message);
       }
+    } else {
+      list = localStore.getMembers(ideaId) || [];
     }
 
-    return localStore.getMembers(ideaId);
+    // Always ensure Idvy is present as an active collaborator and friend
+    if (!list.some(m => m.user_id === idvyBotMember.user_id || m.id === idvyBotMember.id)) {
+      list.push(idvyBotMember);
+    }
+
+    return list;
   },
 
   // Instant DB search for registered users by email or display name
