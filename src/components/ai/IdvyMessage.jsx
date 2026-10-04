@@ -415,6 +415,9 @@ export default function IdvyMessage({
         {/* Body formatted - Always renders complete answer */}
         <div className="text-xs sm:text-sm text-slate-800 leading-relaxed break-words space-y-1">
           {renderFormattedMarkdown(content)}
+          {post.ai_metadata?.is_streaming && (
+            <span className="inline-block w-1.5 h-3.5 ml-1 bg-purple-600 animate-pulse rounded-xs align-middle" title="Idvy is typing..." />
+          )}
         </div>
 
         {/* Source citations for web research */}

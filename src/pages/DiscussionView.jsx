@@ -622,6 +622,9 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
           timelineEndRef.current?.scrollIntoView({ behavior: 'smooth' });
         }, 120);
 
+        const tempStreamingId = `streaming-ai-${Date.now()}`;
+        let hasAppendedTemp = false;
+
         (async () => {
           try {
             const aiResponse = await aiService.queryIdvy({
@@ -630,10 +633,52 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
               idea,
               members,
               posts: updatedPostsList.length > 0 ? updatedPostsList : posts,
-              callerUser: currentUser
+              callerUser: currentUser,
+              onChunk: (delta, accumulated, meta) => {
+                // Once the first token arrives, hide the waiting indicator
+                setIsIdvyThinking(false);
+
+                if (!hasAppendedTemp) {
+                  hasAppendedTemp = true;
+                  setPosts(prev => [
+                    ...prev,
+                    {
+                      id: tempStreamingId,
+                      content: accumulated,
+                      sender_type: 'ai',
+                      agent_name: 'idvy',
+                      created_at: 'Typing...',
+                      user: {
+                        id: IDVY_BOT_USER.id,
+                        display_name: 'Idvy',
+                        email: 'idvy@ideate.app',
+                        avatar_url: '/avatars/idvy-avatar.avif'
+                      },
+                      ai_metadata: {
+                        sources: meta?.sources || [],
+                        command: meta?.command || parsed.command,
+                        targetMember: parsed.targetMember,
+                        is_streaming: true
+                      }
+                    }
+                  ]);
+                } else {
+                  setPosts(prev => prev.map(p => p.id === tempStreamingId ? {
+                    ...p,
+                    content: accumulated,
+                    ai_metadata: {
+                      ...p.ai_metadata,
+                      sources: meta?.sources || p.ai_metadata?.sources || [],
+                      is_streaming: true
+                    }
+                  } : p));
+                }
+
+                timelineEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+              }
             });
 
-            // Insert completed Idvy message into chat thread
+            // Insert completed Idvy message into chat thread in Supabase database
             const botPost = await postService.createPost(idea.id, {
               content: aiResponse.content,
               sender_type: 'ai',
@@ -645,14 +690,16 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
               }
             }, IDVY_BOT_USER);
 
+            // Replace temporary streaming post with the persisted DB post
             setPosts(prev => {
-              const existingIdx = prev.findIndex(p => p.id === botPost.id);
+              const withoutTemp = prev.filter(p => p.id !== tempStreamingId);
+              const existingIdx = withoutTemp.findIndex(p => p.id === botPost.id);
               if (existingIdx !== -1) {
-                const updated = [...prev];
+                const updated = [...withoutTemp];
                 updated[existingIdx] = botPost;
                 return updated;
               }
-              return [...prev, botPost];
+              return [...withoutTemp, botPost];
             });
 
             if (onUpdateIdeaStats) onUpdateIdeaStats(idea.id);
@@ -662,6 +709,8 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
             }, 150);
           } catch (aiErr) {
             console.error('Idvy invocation error:', aiErr);
+            // Clean up temporary streaming post on error
+            setPosts(prev => prev.filter(p => p.id !== tempStreamingId));
             try {
               await postService.createPost(idea.id, {
                 content: `⚠️ **Idvy Collaborator Notice**: ${aiErr.message || 'Unable to complete response. Please check AI access or verify your connection.'}`,

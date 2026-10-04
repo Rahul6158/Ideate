@@ -142,5 +142,3 @@ Would you prefer to use Option 1 (client-side fetch) for a fast implementation, 
 [10] [https://supabase.com](https://supabase.com/blog/supabase-dynamic-functions)
 [11] [https://stackoverflow.com](https://stackoverflow.com/questions/75169659/getstream-with-supabase-via-edge-function-how-to)
 
-
-- learn todo list for noting topics to learn, controllable by idvy, it can add ddelete or edit based on uer commands.

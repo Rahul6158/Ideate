@@ -154,6 +154,8 @@ ${searchResults.length > 0 ? `=== WEB RESEARCH DATA ===\n${searchResults.map((r,
         });
       }
 
+      const isStream = Boolean(body?.stream);
+
       // Call NVIDIA NIM
       const nimResponse = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
         method: 'POST',
@@ -168,13 +170,24 @@ ${searchResults.length > 0 ? `=== WEB RESEARCH DATA ===\n${searchResults.map((r,
             { role: 'user', content: userMessage }
           ],
           temperature: 0.7,
-          max_tokens: 3500
+          max_tokens: 3500,
+          stream: isStream
         })
       });
 
       if (!nimResponse.ok) {
         const errText = await nimResponse.text();
         return Response.json({ error: `NVIDIA NIM Error: ${errText}` }, { status: 502 });
+      }
+
+      if (isStream && nimResponse.body) {
+        return new Response(nimResponse.body, {
+          headers: {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*'
+          }
+        });
       }
 
       const nimData = await nimResponse.json();

@@ -503,7 +503,7 @@ export const aiService = {
   },
 
   /**
-   * Send prompt to Idvy through serverless backend
+   * Send prompt to Idvy through serverless backend with streaming support
    */
   async queryIdvy({
     ideaId,
@@ -511,7 +511,8 @@ export const aiService = {
     idea,
     members = [],
     posts = [],
-    callerUser
+    callerUser,
+    onChunk = null
   }) {
     const parsed = this.parseInput(userPrompt);
 
@@ -544,9 +545,12 @@ export const aiService = {
       } catch (_) {}
     }
 
+    const isStreamingRequested = typeof onChunk === 'function';
+
     const payload = {
       ideaId,
       userPrompt,
+      stream: isStreamingRequested,
       idea: {
         id: idea?.id,
         title: idea?.title,
@@ -594,7 +598,69 @@ export const aiService = {
       });
 
       if (res.ok) {
-        response = await res.json();
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('text/event-stream') && res.body) {
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder('utf-8');
+          let buffer = '';
+          let accumulatedText = '';
+          let streamMeta = { sources: [], command: parsed.command, agent_name: 'idvy' };
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || trimmed === 'data: [DONE]') continue;
+              if (trimmed.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(trimmed.slice(6));
+                  if (data.type === 'meta') {
+                    if (data.sources) streamMeta.sources = data.sources;
+                    if (data.command) streamMeta.command = data.command;
+                    if (data.agent_name) streamMeta.agent_name = data.agent_name;
+                  } else if (data.content) {
+                    accumulatedText += data.content;
+                    if (onChunk) {
+                      onChunk(data.content, accumulatedText, streamMeta);
+                    }
+                  }
+                } catch (_) {}
+              }
+            }
+          }
+
+          if (buffer.trim()) {
+            const trimmed = buffer.trim();
+            if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
+              try {
+                const data = JSON.parse(trimmed.slice(6));
+                if (data.content) {
+                  accumulatedText += data.content;
+                  if (onChunk) {
+                    onChunk(data.content, accumulatedText, streamMeta);
+                  }
+                }
+              } catch (_) {}
+            }
+          }
+
+          response = {
+            content: accumulatedText,
+            agent_name: streamMeta.agent_name || 'idvy',
+            sources: streamMeta.sources || [],
+            command: streamMeta.command || parsed.command
+          };
+        } else {
+          response = await res.json();
+          if (onChunk && response?.content) {
+            onChunk(response.content, response.content, response);
+          }
+        }
       }
     } catch (apiErr) {
       console.warn('API /api/idvy-chat attempt failed:', apiErr.message);
@@ -608,6 +674,9 @@ export const aiService = {
         });
         if (edgeRes.data) {
           response = edgeRes.data;
+          if (onChunk && response?.content) {
+            onChunk(response.content, response.content, response);
+          }
         }
       } catch (edgeErr) {
         console.warn('Supabase functions invoke idvy-chat error:', edgeErr.message);
@@ -631,7 +700,8 @@ export const aiService = {
       idea: params.idea || { id: params.ideaId },
       members: params.members || [],
       posts: params.posts || [],
-      callerUser: params.callerUser
+      callerUser: params.callerUser,
+      onChunk: params.onChunk
     });
   }
 };

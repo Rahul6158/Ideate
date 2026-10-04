@@ -422,6 +422,9 @@ CRITICAL INSTRUCTIONS:
     setMessages(prev => [...prev, userMsg]);
     setIsTyping(true);
 
+    const streamAiMsgId = `ai-${Date.now()}`;
+    let hasAddedAiPlaceholder = false;
+
     try {
       const response = await aiService.callIdvyChat({
         ideaId: idea.id,
@@ -431,19 +434,50 @@ CRITICAL INSTRUCTIONS:
         userPrompt: text,
         callerUser: currentUser,
         posts,
-        members
+        members,
+        onChunk: (delta, accumulated) => {
+          setIsTyping(false);
+          if (!hasAddedAiPlaceholder) {
+            hasAddedAiPlaceholder = true;
+            setMessages(prev => [...prev, {
+              id: streamAiMsgId,
+              role: 'assistant',
+              content: accumulated,
+              is_streaming: true,
+              created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            }]);
+          } else {
+            setMessages(prev => prev.map(m => m.id === streamAiMsgId ? {
+              ...m,
+              content: accumulated,
+              is_streaming: true
+            } : m));
+          }
+        }
       });
 
-      const aiReply = {
-        id: `ai-${Date.now()}`,
-        role: 'assistant',
-        content: response.content || "I'm right here with you off-the-record! What else would you like to explore?",
-        created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
+      const finalContent = response.content || "I'm right here with you off-the-record! What else would you like to explore?";
 
-      setMessages(prev => [...prev, aiReply]);
+      if (hasAddedAiPlaceholder) {
+        setMessages(prev => prev.map(m => m.id === streamAiMsgId ? {
+          ...m,
+          content: finalContent,
+          is_streaming: false
+        } : m));
+      } else {
+        const aiReply = {
+          id: streamAiMsgId,
+          role: 'assistant',
+          content: finalContent,
+          created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+        setMessages(prev => [...prev, aiReply]);
+      }
     } catch (err) {
       console.warn('Off-the-record chat error:', err);
+      if (hasAddedAiPlaceholder) {
+        setMessages(prev => prev.filter(m => m.id !== streamAiMsgId));
+      }
       const errorMsg = {
         id: `ai-err-${Date.now()}`,
         role: 'assistant',
@@ -861,6 +895,9 @@ CRITICAL INSTRUCTIONS:
                   {/* Formatted Markdown Content */}
                   <div className="break-words space-y-1 text-slate-800">
                     {renderFormattedMarkdown(contentStr)}
+                    {m.is_streaming && (
+                      <span className="inline-block w-1.5 h-3.5 ml-1 bg-purple-600 animate-pulse rounded-xs align-middle" title="Idvy is typing..." />
+                    )}
                   </div>
 
                   {/* Action Buttons: Send to Input Box & Post as Idvy */}
