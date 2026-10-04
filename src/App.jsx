@@ -20,6 +20,7 @@ import { notificationService } from './services/notificationService';
 import { pushNotificationService } from './services/pushNotifications';
 
 import LoadingScreen from './components/common/LoadingScreen';
+import OAuthConsent from './pages/OAuthConsent';
 
 export default function App() {
   const { currentUser, loading } = useAuth();
@@ -189,6 +190,16 @@ export default function App() {
       if (refreshed) setActiveIdea(refreshed);
     }
   };
+
+  const isOAuthConsentRoute = typeof window !== 'undefined' && (
+    window.location.pathname.startsWith('/oauth/consent') ||
+    window.location.hash.startsWith('#oauth/consent') ||
+    window.location.hash.startsWith('#/oauth/consent')
+  );
+
+  if (isOAuthConsentRoute) {
+    return <OAuthConsent />;
+  }
 
   if (loading) {
     return <LoadingScreen message="Loading Ideate..." />;

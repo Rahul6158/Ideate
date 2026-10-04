@@ -766,5 +766,31 @@ export const authService = {
       return data;
     }
     return true;
+  },
+
+  async signInWithOAuth(provider = 'google') {
+    if (isSupabaseConfigured && supabase) {
+      const origin = typeof window !== 'undefined' 
+        ? window.location.origin 
+        : 'https://ideate-black.vercel.app';
+      
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo: origin,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent'
+          }
+        }
+      });
+      if (error) throw error;
+      return { redirecting: true, ...data };
+    }
+    throw new Error('Supabase authentication is not configured.');
+  },
+
+  async signInWithGoogle() {
+    return this.signInWithOAuth('google');
   }
 };
