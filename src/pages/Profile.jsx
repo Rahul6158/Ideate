@@ -36,7 +36,7 @@ export default function Profile({ onBack }) {
     if (resolvedAvatar) setSelectedAvatar(resolvedAvatar);
   }, [currentUser]);
 
-  const categories = ['All', 'Creative', 'Pro', 'Avatar'];
+  const categories = ['All', 'Girls', 'Boys', 'Creative', 'Pro', 'Avatar'];
   
   const filteredAvatars = selectedCategory === 'All' 
     ? AVAILABLE_AVATARS 
@@ -227,7 +227,7 @@ export default function Profile({ onBack }) {
                   <span>Choose Your Avatar</span>
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Pick from our curated gallery of 26 creative avatar illustrations
+                  Pick from our curated gallery of {AVAILABLE_AVATARS.length} creative avatar illustrations
                 </p>
               </div>
 
