@@ -59,6 +59,7 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
     pushNotificationService.isIdeaMuted(currentUser?.id, idea?.id)
   );
   const settingsMenuRef = useRef(null);
+  const activeStreamsRef = useRef(new Set());
 
   useEffect(() => {
     setIsMuted(pushNotificationService.isIdeaMuted(currentUser?.id, idea?.id));
@@ -383,6 +384,22 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
             }
           } catch (_) {}
         }
+      },
+      (updatedPost) => {
+        // If this post is currently streaming via SSE on THIS browser,
+        // ignore intermediate WebSocket updates to prevent clobbering local stream!
+        if (activeStreamsRef.current.has(updatedPost.id)) {
+          return;
+        }
+        setPosts(prev => {
+          const existingIdx = prev.findIndex(p => p.id === updatedPost.id);
+          if (existingIdx !== -1) {
+            const updated = [...prev];
+            updated[existingIdx] = { ...updated[existingIdx], ...updatedPost };
+            return updated;
+          }
+          return [...prev, updatedPost];
+        });
       }
     );
 
@@ -622,12 +639,29 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
           timelineEndRef.current?.scrollIntoView({ behavior: 'smooth' });
         }, 120);
 
-        const tempStreamingId = `streaming-ai-${Date.now()}`;
-        let hasAppendedTemp = false;
-
         (async () => {
+          let pendingPost = null;
           try {
+            // Phase 1: Pre-allocate pending AI post row directly in Supabase
+            // This guarantees the record exists in PostgreSQL at t=0
+            pendingPost = await postService.createAIPendingPost({
+              ideaId: idea.id,
+              command: parsed.command,
+              targetMember: parsed.targetMember
+            }, currentUser);
+
+            if (pendingPost?.id) {
+              activeStreamsRef.current.add(pendingPost.id);
+              setPosts(prev => {
+                const exists = prev.some(p => p.id === pendingPost.id);
+                if (exists) return prev;
+                return [...prev, pendingPost];
+              });
+            }
+
+            // Phase 2: Asynchronous streaming request with server settlement
             const aiResponse = await aiService.queryIdvy({
+              postId: pendingPost?.id || null,
               ideaId: idea.id,
               userPrompt: userMessageContent,
               idea,
@@ -638,38 +672,15 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
                 // Once the first token arrives, hide the waiting indicator
                 setIsIdvyThinking(false);
 
-                if (!hasAppendedTemp) {
-                  hasAppendedTemp = true;
-                  setPosts(prev => [
-                    ...prev,
-                    {
-                      id: tempStreamingId,
-                      content: accumulated,
-                      sender_type: 'ai',
-                      agent_name: 'idvy',
-                      created_at: 'Typing...',
-                      user: {
-                        id: IDVY_BOT_USER.id,
-                        display_name: 'Idvy',
-                        email: 'idvy@ideate.app',
-                        avatar_url: '/avatars/idvy-avatar.avif'
-                      },
-                      ai_metadata: {
-                        sources: meta?.sources || [],
-                        command: meta?.command || parsed.command,
-                        targetMember: parsed.targetMember,
-                        is_streaming: true
-                      }
-                    }
-                  ]);
-                } else {
-                  setPosts(prev => prev.map(p => p.id === tempStreamingId ? {
+                if (pendingPost?.id) {
+                  setPosts(prev => prev.map(p => p.id === pendingPost.id ? {
                     ...p,
                     content: accumulated,
                     ai_metadata: {
                       ...p.ai_metadata,
-                      sources: meta?.sources || p.ai_metadata?.sources || [],
-                      is_streaming: true
+                      status: 'generating',
+                      is_streaming: true,
+                      sources: meta?.sources || p.ai_metadata?.sources || []
                     }
                   } : p));
                 }
@@ -678,29 +689,20 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
               }
             });
 
-            // Insert completed Idvy message into chat thread in Supabase database
-            const botPost = await postService.createPost(idea.id, {
-              content: aiResponse.content,
-              sender_type: 'ai',
-              agent_name: 'idvy',
-              ai_metadata: {
-                sources: aiResponse.sources || [],
-                command: aiResponse.command || parsed.command,
-                targetMember: parsed.targetMember
-              }
-            }, IDVY_BOT_USER);
-
-            // Replace temporary streaming post with the persisted DB post
-            setPosts(prev => {
-              const withoutTemp = prev.filter(p => p.id !== tempStreamingId);
-              const existingIdx = withoutTemp.findIndex(p => p.id === botPost.id);
-              if (existingIdx !== -1) {
-                const updated = [...withoutTemp];
-                updated[existingIdx] = botPost;
-                return updated;
-              }
-              return [...withoutTemp, botPost];
-            });
+            // Phase 3: Finalize local state upon completion (server has already settled Supabase DB!)
+            if (pendingPost?.id) {
+              activeStreamsRef.current.delete(pendingPost.id);
+              setPosts(prev => prev.map(p => p.id === pendingPost.id ? {
+                ...p,
+                content: aiResponse.content,
+                ai_metadata: {
+                  ...p.ai_metadata,
+                  status: 'completed',
+                  is_streaming: false,
+                  sources: aiResponse.sources || []
+                }
+              } : p));
+            }
 
             if (onUpdateIdeaStats) onUpdateIdeaStats(idea.id);
 
@@ -709,15 +711,18 @@ export default function DiscussionView({ idea, onBack, onUpdateIdeaStats, onEdit
             }, 150);
           } catch (aiErr) {
             console.error('Idvy invocation error:', aiErr);
-            // Clean up temporary streaming post on error
-            setPosts(prev => prev.filter(p => p.id !== tempStreamingId));
-            try {
-              await postService.createPost(idea.id, {
-                content: `⚠️ **Idvy Collaborator Notice**: ${aiErr.message || 'Unable to complete response. Please check AI access or verify your connection.'}`,
-                sender_type: 'ai',
-                agent_name: 'idvy'
-              }, IDVY_BOT_USER);
-            } catch (_) {}
+            if (pendingPost?.id) {
+              activeStreamsRef.current.delete(pendingPost.id);
+              setPosts(prev => prev.map(p => p.id === pendingPost.id ? {
+                ...p,
+                content: p.content || `⚠️ **Idvy Collaborator Notice**: ${aiErr.message || 'Unable to complete response. Please check AI access or verify your connection.'}`,
+                ai_metadata: {
+                  ...p.ai_metadata,
+                  status: p.content ? 'interrupted' : 'failed',
+                  is_streaming: false
+                }
+              } : p));
+            }
           } finally {
             setIsIdvyThinking(false);
             setIdvyStatus('Idvy is reviewing the discussion...');

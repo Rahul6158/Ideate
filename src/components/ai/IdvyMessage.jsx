@@ -13,7 +13,8 @@ import {
   CornerUpLeft,
   Globe,
   Quote,
-  EyeOff
+  EyeOff,
+  AlertCircle
 } from 'lucide-react';
 import IdvyAvatar from './IdvyAvatar';
 import { stripMarkdown } from '../../utils/textUtils';
@@ -414,9 +415,27 @@ export default function IdvyMessage({
 
         {/* Body formatted - Always renders complete answer */}
         <div className="text-xs sm:text-sm text-slate-800 leading-relaxed break-words space-y-1">
-          {renderFormattedMarkdown(content)}
-          {post.ai_metadata?.is_streaming && (
-            <span className="inline-block w-1.5 h-3.5 ml-1 bg-purple-600 animate-pulse rounded-xs align-middle" title="Idvy is typing..." />
+          {(!content || !content.trim()) && post.ai_metadata?.status === 'generating' ? (
+            <div className="flex items-center gap-2 py-2 text-xs text-purple-700 font-medium animate-pulse">
+              <Sparkles className="w-4 h-4 text-purple-600 animate-spin" />
+              <span>Idvy is thinking & formulating a response...</span>
+            </div>
+          ) : (
+            <>
+              {renderFormattedMarkdown(content)}
+              {post.ai_metadata?.is_streaming && (
+                <span className="inline-block w-1.5 h-3.5 ml-1 bg-purple-600 animate-pulse rounded-xs align-middle" title="Idvy is typing..." />
+              )}
+            </>
+          )}
+
+          {post.ai_metadata?.status === 'interrupted' && (
+            <div className="mt-2.5 px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200/80 text-amber-900 text-xs flex items-center justify-between gap-2 shadow-2xs">
+              <span className="flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+                <span>Generation paused due to connection interruption. Reloading will sync the latest saved text.</span>
+              </span>
+            </div>
           )}
         </div>
 
