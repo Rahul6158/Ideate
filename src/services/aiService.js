@@ -506,7 +506,6 @@ export const aiService = {
    * Send prompt to Idvy through serverless backend with streaming support
    */
   async queryIdvy({
-    postId = null,
     ideaId,
     userPrompt,
     idea,
@@ -549,7 +548,6 @@ export const aiService = {
     const isStreamingRequested = typeof onChunk === 'function';
 
     const payload = {
-      postId,
       ideaId,
       userPrompt,
       stream: isStreamingRequested,
@@ -697,7 +695,6 @@ export const aiService = {
    */
   async callIdvyChat(params = {}) {
     return this.queryIdvy({
-      postId: params.postId || null,
       ideaId: params.ideaId,
       userPrompt: params.userPrompt || params.prompt || '',
       idea: params.idea || { id: params.ideaId },

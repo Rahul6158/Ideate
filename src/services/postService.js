@@ -312,88 +312,6 @@ export const postService = {
     return newPost;
   },
 
-  /**
-   * Pre-allocates an AI message placeholder row directly in Supabase
-   */
-  async createAIPendingPost({ ideaId, senderType = 'ai', agentName = 'idvy', command = null, targetMember = null }, currentUser) {
-    return this.createPost(ideaId, {
-      content: '',
-      sender_type: senderType,
-      agent_name: agentName,
-      ai_metadata: {
-        status: 'generating',
-        is_streaming: true,
-        command,
-        targetMember,
-        started_at: new Date().toISOString()
-      }
-    }, currentUser);
-  },
-
-  /**
-   * Updates an existing post in Supabase with encoded metadata
-   */
-  async updatePost(postId, { content, sender_type = 'ai', agent_name = 'idvy', ai_metadata = null }) {
-    if (isSupabaseConfigured) {
-      try {
-        const encodedContent = encodePostContent(content, {
-          sender_type,
-          agent_name,
-          ai_metadata,
-          is_system: false
-        });
-
-        // Try update with full columns first
-        const { data, error } = await supabase
-          .from('posts')
-          .update({
-            content: encodedContent,
-            sender_type,
-            agent_name,
-            ai_metadata
-          })
-          .eq('id', postId)
-          .select()
-          .single();
-
-        if (error && (error.code === '42703' || error.message?.includes('column'))) {
-          // Fallback to updating content only
-          const baseRes = await supabase
-            .from('posts')
-            .update({ content: encodedContent })
-            .eq('id', postId)
-            .select()
-            .single();
-
-          if (!baseRes.error && baseRes.data) {
-            const { content: clean, meta } = decodePostContent(baseRes.data.content);
-            return {
-              ...baseRes.data,
-              content: clean,
-              sender_type: baseRes.data.sender_type || meta.sender_type || sender_type,
-              agent_name: baseRes.data.agent_name || meta.agent_name || agent_name,
-              ai_metadata: baseRes.data.ai_metadata || meta.ai_metadata || ai_metadata
-            };
-          }
-        }
-
-        if (data) {
-          const { content: clean, meta } = decodePostContent(data.content);
-          return {
-            ...data,
-            content: clean,
-            sender_type: data.sender_type || meta.sender_type || sender_type,
-            agent_name: data.agent_name || meta.agent_name || agent_name,
-            ai_metadata: data.ai_metadata || meta.ai_metadata || ai_metadata
-          };
-        }
-      } catch (err) {
-        console.warn('postService.updatePost error:', err);
-      }
-    }
-    return null;
-  },
-
   async deletePost(ideaId, postId) {
     if (isSupabaseConfigured) {
       try {
@@ -526,7 +444,7 @@ export const postService = {
     return result;
   },
 
-  subscribeToPosts(ideaId, onNewPost, onDeletePost, onReactionChange, onUpdatePost) {
+  subscribeToPosts(ideaId, onNewPost, onDeletePost, onReactionChange) {
     if (!isSupabaseConfigured) return () => {};
 
     const channel = supabase
@@ -588,58 +506,6 @@ export const postService = {
           }
 
           onNewPost({
-            ...data,
-            content: cleanContent,
-            sender_type,
-            agent_name,
-            ai_metadata,
-            reply_to,
-            is_system,
-            user: isIdvy ? {
-              id: '00000000-0000-0000-0000-000000001d71',
-              display_name: 'Idvy',
-              email: 'idvy@ideate.app',
-              avatar_url: '/avatars/idvy-avatar.avif'
-            } : data.user,
-            timestamp: new Date(data.created_at).getTime(),
-            created_at: formatTimestamp(data.created_at),
-            reactions: data.reactions || []
-          });
-        }
-      })
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'posts',
-        filter: `idea_id=eq.${ideaId}`
-      }, async (payload) => {
-        if (!onUpdatePost || !payload.new) return;
-        const { data } = await supabase
-          .from('posts')
-          .select(`
-            id,
-            idea_id,
-            user_id,
-            content,
-            created_at,
-            user:profiles!posts_user_id_fkey(id, email, display_name, avatar_url),
-            attachments:post_attachments(*),
-            reactions:post_reactions(*, user:profiles!post_reactions_user_id_fkey(id, email, display_name, avatar_url))
-          `)
-          .eq('id', payload.new.id)
-          .single();
-
-        if (data) {
-          const { content: cleanContent, meta } = decodePostContent(data.content);
-          const sender_type = data.sender_type || meta.sender_type || 'user';
-          const agent_name = data.agent_name || meta.agent_name || null;
-          const ai_metadata = data.ai_metadata || meta.ai_metadata || null;
-          const reply_to = data.reply_to || meta.reply_to || null;
-          const is_system = data.is_system || meta.is_system || false;
-
-          const isIdvy = agent_name === 'idvy' || sender_type === 'ai';
-
-          onUpdatePost({
             ...data,
             content: cleanContent,
             sender_type,

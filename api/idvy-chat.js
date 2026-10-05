@@ -3,8 +3,6 @@
 // Endpoint: /api/idvy-chat
 // ==============================================================================
 
-import { waitUntil } from '@vercel/functions';
-import { createClient } from '@supabase/supabase-js';
 import {
   parseIdvyCommand,
   buildIdvyContext,
@@ -14,18 +12,6 @@ import {
 } from '../server/idvyCore.js';
 import { performWebSearch } from '../server/searchEngine.js';
 
-const META_PREFIX = '<!--ideate-meta:';
-const META_SUFFIX = '-->';
-
-function encodePostContent(rawContent, { sender_type, agent_name, ai_metadata }) {
-  const meta = {
-    sender_type: sender_type || 'ai',
-    agent_name: agent_name || 'idvy',
-    ai_metadata: ai_metadata || {}
-  };
-  return `${META_PREFIX}${JSON.stringify(meta)}${META_SUFFIX}\n${rawContent || ''}`;
-}
-
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -34,7 +20,6 @@ export default async function handler(req, res) {
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const {
-      postId = null,
       ideaId,
       userPrompt,
       idea = {},
@@ -50,29 +35,6 @@ export default async function handler(req, res) {
     if (!ideaId) {
       return res.status(400).json({ error: 'Missing ideaId parameter' });
     }
-
-    // Set up Supabase clients for authentication and server settlement
-    const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-    const supabaseAnonKey = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-    const supabaseServiceKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    const authHeader = req.headers.authorization;
-    const token = authHeader?.replace(/^Bearer\s+/i, '');
-
-    const userClient = token && supabaseUrl && supabaseAnonKey
-      ? createClient(supabaseUrl, supabaseAnonKey, {
-          global: { headers: { Authorization: `Bearer ${token}` } },
-          auth: { persistSession: false, autoRefreshToken: false }
-        })
-      : null;
-
-    // For database settlement: prefer Service Role Key to bypass RLS conflicts on bot-authored records;
-    // fall back to authenticated userClient if service role key is not configured.
-    const settlementClient = supabaseUrl && supabaseServiceKey
-      ? createClient(supabaseUrl, supabaseServiceKey, {
-          auth: { persistSession: false, autoRefreshToken: false }
-        })
-      : userClient;
 
     // 1. Parse command and arguments if not already pre-parsed
     const parsed = parseIdvyCommand(userPrompt || '');
@@ -107,65 +69,8 @@ export default async function handler(req, res) {
       : (parsed.cleanedText || userPrompt || 'What is your perspective on this idea so far?');
 
     const apiKey = process.env.NVIDIA_API_KEY;
+
     const isStream = Boolean(body?.stream);
-
-    let isSettled = false;
-
-    // Asynchronous settlement helper: directly updates Supabase PostgreSQL
-    async function settlePost(finalContent, status = 'completed', extraMeta = {}) {
-      if (!postId || !settlementClient) return;
-      try {
-        const encoded = encodePostContent(finalContent, {
-          sender_type: 'ai',
-          agent_name: 'idvy',
-          ai_metadata: {
-            status,
-            is_streaming: false,
-            sources: searchResults,
-            command: activeCommand,
-            settled_at: new Date().toISOString(),
-            ...extraMeta
-          }
-        });
-
-        const { error } = await settlementClient
-          .from('posts')
-          .update({
-            content: encoded,
-            sender_type: 'ai',
-            agent_name: 'idvy',
-            ai_metadata: {
-              status,
-              is_streaming: false,
-              sources: searchResults,
-              command: activeCommand,
-              settled_at: new Date().toISOString(),
-              ...extraMeta
-            }
-          })
-          .eq('id', postId);
-
-        if (error && (error.code === '42703' || error.message?.includes('column'))) {
-          await settlementClient
-            .from('posts')
-            .update({ content: encoded })
-            .eq('id', postId);
-        }
-
-        // Update idea rolling memory
-        if (status === 'completed' && finalContent) {
-          try {
-            await settlementClient.from('idea_ai_memory').upsert({
-              idea_id: ideaId,
-              discussion_summary: finalContent.slice(0, 500),
-              updated_at: new Date().toISOString()
-            }, { onConflict: 'idea_id' });
-          } catch (_) {}
-        }
-      } catch (err) {
-        console.warn('Autonomous settlePost notice:', err.message);
-      }
-    }
 
     // Graceful fallback for local development without active NVIDIA API Key
     if (!apiKey) {
@@ -183,10 +88,6 @@ export default async function handler(req, res) {
 
       const fallbackText = mockResponses[activeCommand] ||
         `Hey friend! 👋 I've gone through our discussion for "${idea.title || 'your idea'}" and there is so much fantastic momentum here! What exciting part shall we tackle next? We can explore \`/summarize\`, bounce fresh ideas with \`/improve\`, or pressure-test key concepts with \`/validate\`!`;
-
-      // Settle in Supabase
-      isSettled = true;
-      await settlePost(fallbackText, 'completed');
 
       if (isStream) {
         res.writeHead(200, {
@@ -211,6 +112,7 @@ export default async function handler(req, res) {
 
     try {
       const isGreeting = !activeCommand && /^(hi|hello|hey|are you (there|still there)|how are you|good (morning|afternoon|evening)|yo|thanks|thank you|nice work|good job)[!?.\s]*$/i.test(userMessageContent.trim());
+      // Ample token headroom so sentences, markdown tables, and bullet points are never chopped mid-thought
       const targetTokens = isGreeting ? 400 : 3500;
 
       if (isStream) {
@@ -222,25 +124,10 @@ export default async function handler(req, res) {
           'X-Accel-Buffering': 'no'
         });
 
-        // 1. Send metadata event immediately
+        // 1. Send metadata event immediately (sources, command, agent)
         res.write(`data: ${JSON.stringify({ type: 'meta', sources: searchResults, command: activeCommand, agent_name: 'idvy' })}\n\n`);
 
-        let buffer = '';
-
-        // 2. Disconnect Handler: If user refreshes or connection drops, flush accumulated tokens
-        req.on('close', () => {
-          if (!isSettled && postId) {
-            isSettled = true;
-            const partialText = buffer || 'Generation paused due to connection interruption.';
-            try {
-              waitUntil(settlePost(partialText, 'interrupted'));
-            } catch (_) {
-              settlePost(partialText, 'interrupted').catch(() => {});
-            }
-          }
-        });
-
-        // 3. Call live NVIDIA NIM with stream: true
+        // 2. Call live NVIDIA NIM with stream: true
         const nimRes = await callNvidiaNim({
           messages: [
             { role: 'system', content: fullContext },
@@ -252,19 +139,19 @@ export default async function handler(req, res) {
         });
 
         if (!nimRes.body) {
-          throw new Error('NVIDIA NIM returned an empty response stream.');
+          throw new Error('NVIDIA NIM returned an empty response body stream.');
         }
 
         const reader = nimRes.body.getReader();
         const decoder = new TextDecoder('utf-8');
-        let lineBuffer = '';
+        let buffer = '';
 
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-          lineBuffer += decoder.decode(value, { stream: true });
-          const lines = lineBuffer.split('\n');
-          lineBuffer = lines.pop() || '';
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
 
           for (const line of lines) {
             const trimmed = line.trim();
@@ -278,39 +165,33 @@ export default async function handler(req, res) {
                 const parsed = JSON.parse(trimmed.slice(6));
                 const delta = parsed.choices?.[0]?.delta?.content;
                 if (delta) {
-                  buffer += delta;
                   res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
                 }
-              } catch (_) {}
+              } catch (_) {
+                // Ignore partial JSON chunks until full line completes
+              }
             }
           }
         }
 
-        if (lineBuffer.trim()) {
-          const trimmed = lineBuffer.trim();
+        if (buffer.trim()) {
+          const trimmed = buffer.trim();
           if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
             try {
               const parsed = JSON.parse(trimmed.slice(6));
               const delta = parsed.choices?.[0]?.delta?.content;
               if (delta) {
-                buffer += delta;
                 res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
               }
             } catch (_) {}
           }
         }
 
-        // 4. Stream completed successfully: perform autonomous settlement
-        if (!isSettled && postId) {
-          isSettled = true;
-          await settlePost(buffer, 'completed');
-        }
-
         res.write('data: [DONE]\n\n');
         return res.end();
       }
 
-      // Non-stream mode
+      // Non-stream mode: wait for full JSON
       const nimRes = await callNvidiaNim({
         messages: [
           { role: 'system', content: fullContext },
@@ -324,11 +205,6 @@ export default async function handler(req, res) {
       const data = await nimRes.json();
       const content = data.choices?.[0]?.message?.content || 'No response from Idvy.';
 
-      if (!isSettled && postId) {
-        isSettled = true;
-        await settlePost(content, 'completed');
-      }
-
       return res.status(200).json({
         content,
         agent_name: 'idvy',
@@ -339,6 +215,7 @@ export default async function handler(req, res) {
     } catch (nimError) {
       console.warn('NVIDIA NIM endpoint notice:', nimError.message);
 
+      // Gracefully formulate an intelligent, high-quality response so users are never left with a broken thread
       const callerName = callerUser?.display_name || callerUser?.email?.split('@')[0] || 'Friend';
       let contextualFallback = '';
 
@@ -350,11 +227,6 @@ export default async function handler(req, res) {
         contextualFallback = `### 🛡️ Risk Assessment: "${idea.title || 'Concept'}"\n\n1. **User Adoption Risk:** Ensure the onboarding curve is effortless without steep configuration steps.\n2. **Differentiation:** Clearly highlight the unique angle separating this from existing alternatives.\n3. **Recommended Next Step:** Run a rapid prototype with 3-5 target collaborators.`;
       } else {
         contextualFallback = `Hey @${callerName}! 🔒 I've analyzed our context for **${idea.title || 'your idea'}**!\n\nHere are my key observations:\n- **Core Concept:** ${idea.description || 'A high-impact collaborative project.'}\n- **Momentum:** You've got great foundational thinking here.\n- **Recommended Focus:** How can we turn the latest discussion points into actionable milestones?\n\nFeel free to ask me anything specific—like evaluating a hidden risk, brainstorming wild pivots, or drafting a proposal! ✨`;
-      }
-
-      if (!isSettled && postId) {
-        isSettled = true;
-        await settlePost(contextualFallback, 'completed', { notice: nimError.message });
       }
 
       if (isStream) {
