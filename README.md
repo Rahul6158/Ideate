@@ -55,7 +55,7 @@ The screenshots below show the main workflows and features in Ideate. All images
 | ![Custom profile and avatar options](./ideate-screenshots/custom-profile-and-avatar-options.png) | ![Live notifications](./ideate-screenshots/live-notifications.png) |
 
 | Slash command reference |
-|---|
+| :---: |
 | ![List of slash commands](./ideate-screenshots/list%20of%20slash%20commands%20which%20simplify%20our%20work%20in%20ideation.png) |
 
 ---
