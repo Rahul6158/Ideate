@@ -40,9 +40,9 @@ The screenshots below show the main workflows and features in Ideate. All images
 |---|---|
 | ![AI assistant](./ideate-screenshots/ai-assistant.png) | ![AI assistant answers about the idea](./ideate-screenshots/ai-assistant-answers-about-the-idea.png) |
 
-| Slash commands |
-|---|
-| ![Slash commands for Idvy AI](./ideate-screenshots/slash-commands-for-idvy-ai-to-perform-specific-actions.png) |
+| Slash command reference |
+| :---: |
+| ![List of slash commands](https://raw.githubusercontent.com/Rahul6158/Ideate/main/ideate-screenshots/list%20of%20slash%20commands%20which%20simplify%20our%20work%20in%20ideation.png) |
 
 ### Permissions, profiles, and notifications
 
